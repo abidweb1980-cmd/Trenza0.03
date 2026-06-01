@@ -219,6 +219,7 @@ body {
 
 .sidebar-btn.active {
   color: #2962ff;
+  background-color: #2a2e39;
 }
 
 .sidebar-spacer {
@@ -236,16 +237,51 @@ body {
   overflow: hidden;
 }
 
-.chart-placeholder {
-  color: #ffffff;
-  font-size: 18px;
-  font-weight: 500;
-  letter-spacing: 0.3px;
+#chart-container {
+  width: 100%;
+  height: 100%;
+  position: relative;
 }
 
-/* SVG icon helpers */
-.icon-svg {
-  width: 18px;
-  height: 18px;
-  fill: currentColor;
+/* Cursor styles for different drawing modes */
+.chart-area.cursor-crosshair {
+  cursor: crosshair;
+}
+
+.chart-area.cursor-pointer {
+  cursor: pointer;
+}
+
+.chart-area.cursor-grab {
+  cursor: grab;
+}
+
+.chart-area.cursor-grabbing {
+  cursor: grabbing;
+}
+
+.chart-area.cursor-default {
+  cursor: default;
+}
+
+/* Toast / status indicator */
+.tool-status {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  background-color: rgba(41, 98, 255, 0.95);
+  color: #ffffff;
+  padding: 6px 14px;
+  border-radius: 14px;
+  font-size: 12px;
+  font-weight: 500;
+  z-index: 10;
+  pointer-events: none;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  display: none;
+}
+
+.tool-status.visible {
+  display: block;
 }

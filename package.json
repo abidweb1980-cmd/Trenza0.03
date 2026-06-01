@@ -30,6 +30,8 @@
   },
   "dependencies": {
     "electron-squirrel-startup": "^1.0.1",
-    "lightweight-charts": "^5.2.0"
+    "lightweight-charts": "^5.2.0",
+    "lwc-plugin-rectangles": "^1.0.20",
+    "lwc-plugin-shape-drawing": "^2.0.0"
   }
 }
