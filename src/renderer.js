@@ -9,21 +9,28 @@
 //      keyboard, and "any other sidebar button deactivates the
 //      drawing tool".
 //
-// The trendline tool itself honours TradingView-style modifier keys:
+// Both the trendline tool and the rectangle tool honour
+// TradingView-style modifier keys:
 //   • SHIFT held  →  angle-lock the second anchor to the closest 45°
 //   • CTRL  held  →  magnet-snap the second anchor to the nearest
 //                    candlestick OHLC value
-// (see src/utils/trendlineTool.js + src/utils/chartSnap.js)
+// (see src/utils/trendlineTool.js + src/utils/rectangleTool.js
+//  + src/utils/chartSnap.js)
 
 import { CandlestickSeries, createChart, CrosshairMode } from 'lightweight-charts';
+import 'bootstrap-icons/font/bootstrap-icons.min.css';
 
-import { createState, TRENDLINE_COLOR } from './utils/state.js';
+import { createState, TRENDLINE_COLOR, RECTANGLE_COLOR } from './utils/state.js';
 import { createUI } from './utils/ui.js';
 import { createChartLock } from './utils/chartLock.js';
 import { createPreviewManager } from './utils/previewManager.js';
 import { createTrendlineManager } from './utils/trendlineManager.js';
 import { createTrendlineTool } from './utils/trendlineTool.js';
 import { createTrendlineInteraction } from './utils/trendlineInteraction.js';
+import { createRectangleManager } from './utils/rectangleManager.js';
+import { createRectanglePreview } from './utils/rectanglePreview.js';
+import { createRectangleTool } from './utils/rectangleTool.js';
+import { createRectangleInteraction } from './utils/rectangleInteraction.js';
 import { extendWithDummies } from './utils/dataExtension.js';
 
 // How many dummy candles to prepend/append so the user can draw
@@ -35,6 +42,7 @@ const container = document.getElementById('chart-container');
 const chartArea = document.getElementById('chart-area');
 const toolStatus = document.getElementById('tool-status');
 const trendlineToolBtn = document.getElementById('trendline-tool');
+const rectangleToolBtn = document.getElementById('rectangle-tool');
 
 // ---------- 1. Chart + series ----------
 const chart = createChart(container, {
@@ -124,10 +132,11 @@ const state = createState();
 const ui = createUI(chartArea, toolStatus, chart);
 const chartLock = createChartLock(chart);
 
+// ---------- 3. Trendline tool ----------
 const trendlines = createTrendlineManager(
     chart, candlestickSeries, state, TRENDLINE_COLOR, ui.requestRedraw
 );
-const preview = createPreviewManager(
+const trendlinePreview = createPreviewManager(
     chart, candlestickSeries, state, TRENDLINE_COLOR, ui.requestRedraw
 );
 const drawingTool = createTrendlineTool({
@@ -137,7 +146,7 @@ const drawingTool = createTrendlineTool({
     series: candlestickSeries,
     ui,
     chartLock,
-    preview,
+    preview: trendlinePreview,
     trendlines,
 });
 
@@ -154,36 +163,119 @@ createTrendlineInteraction({
     getCtrlDown:   () => drawingTool.getCtrlDown(),
 });
 
-// ---------- 3. Wire up top-level events ----------
-// Deactivate the drawing tool when any other sidebar button is clicked.
-document.querySelectorAll('.sidebar-btn').forEach(btn => {
-    if (btn.id === 'trendline-tool') return;
-    btn.addEventListener('click', () => drawingTool.deactivate());
+// ---------- 4. Rectangle tool ----------
+const rectanglesMgr = createRectangleManager(
+    chart, candlestickSeries, state, RECTANGLE_COLOR, ui.requestRedraw
+);
+const rectanglePreview = createRectanglePreview(
+    chart, candlestickSeries, state, RECTANGLE_COLOR
+);
+const rectangleDrawingTool = createRectangleTool({
+    state,
+    toolBtn: rectangleToolBtn,
+    chart,
+    series: candlestickSeries,
+    ui,
+    chartLock,
+    preview: rectanglePreview,
+    rectangles: rectanglesMgr,
 });
 
-// Chart click is only consumed in drawing mode.
-chart.subscribeClick((param) => drawingTool.handleChartClick(param));
+createRectangleInteraction({
+    container,
+    state,
+    ui,
+    chartLock,
+    rectangles: rectanglesMgr,
+    chart,
+    series: candlestickSeries,
+    getSnapTargets: () => rectangleDrawingTool.getSnapTargets(),
+    getShiftDown:  () => rectangleDrawingTool.getShiftDown(),
+    getCtrlDown:   () => rectangleDrawingTool.getCtrlDown(),
+});
 
-// Crosshair move keeps the preview line tracking the cursor.
-// (SHIFT/CTRL snap is handled inside drawingTool.handleCrosshairMove.)
-chart.subscribeCrosshairMove((param) => drawingTool.handleCrosshairMove(param));
+// ---------- 5. Cross-tool deactivation ----------
+//
+// We have two drawing tools (trendline + rectangle).  Activating
+// one should deactivate the other so they don't fight.  We do
+// this with explicit per-button listeners that ONLY call
+// deactivate() if the other tool is actually active.  (Using
+// `isActive()` is important: an unconditional deactivate() would
+// wipe out the global state — `state.mode`, `chartLock`, etc. —
+// even when no drawing tool is active, breaking subsequent
+// activation of any tool.)
+trendlineToolBtn.addEventListener('click', () => {
+    if (rectangleDrawingTool.isActive()) rectangleDrawingTool.deactivate();
+});
+rectangleToolBtn.addEventListener('click', () => {
+    if (drawingTool.isActive()) drawingTool.deactivate();
+});
+
+// ---------- 6. Wire up top-level events ----------
+//
+// Deactivate BOTH drawing tools when any other sidebar button is
+// clicked.  Both checks use isActive() so the click on the
+// rectangle button itself (which already activated the rectangle
+// tool) doesn't immediately deactivate it via the trendline's
+// unconditional-deactivate listener.
+document.querySelectorAll('.sidebar-btn').forEach(btn => {
+    if (btn.id === 'rectangle-tool') return;
+    btn.addEventListener('click', () => {
+        if (rectangleDrawingTool.isActive()) rectangleDrawingTool.deactivate();
+    });
+});
+
+document.querySelectorAll('.sidebar-btn').forEach(btn => {
+    if (btn.id === 'trendline-tool') return;
+    btn.addEventListener('click', () => {
+        if (drawingTool.isActive()) drawingTool.deactivate();
+    });
+});
+
+// Chart click is consumed by whichever tool is active.
+chart.subscribeClick((param) => {
+    if (rectangleDrawingTool.isActive()) {
+        rectangleDrawingTool.handleChartClick(param);
+        return;
+    }
+    drawingTool.handleChartClick(param);
+});
+
+// Crosshair move is routed to the active tool.
+chart.subscribeCrosshairMove((param) => {
+    if (rectangleDrawingTool.isActive()) {
+        rectangleDrawingTool.handleCrosshairMove(param);
+        return;
+    }
+    drawingTool.handleCrosshairMove(param);
+});
 
 // Keyboard shortcuts.
 window.addEventListener('keydown', (evt) => {
     if (evt.key === 'Escape') {
-        if (drawingTool.isActive()) {
+        if (rectangleDrawingTool.isActive()) {
+            rectangleDrawingTool.cancelInProgress();
+            rectangleDrawingTool.deactivate();
+        } else if (drawingTool.isActive()) {
             drawingTool.cancelInProgress();
             drawingTool.deactivate();
+        } else if (state.selectedRectangle) {
+            rectanglesMgr.clearSelection();
         } else if (state.selectedTrendLine) {
             trendlines.clearSelection();
         }
-    } else if ((evt.key === 'Delete' || evt.key === 'Backspace') && state.selectedTrendLine) {
-        trendlines.remove(state.selectedTrendLine);
+    } else if ((evt.key === 'Delete' || evt.key === 'Backspace')
+               && (state.selectedRectangle || state.selectedTrendLine)) {
+        if (state.selectedRectangle) {
+            rectanglesMgr.remove(state.selectedRectangle);
+        } else if (state.selectedTrendLine) {
+            trendlines.remove(state.selectedTrendLine);
+        }
         ui.requestRedraw();
     }
 });
 
-// ---------- 4. Resize observer ----------
+// ---------- 7. Resize observer ----------
 new ResizeObserver(entries => {
     if (entries.length === 0) return;
     const { width, height } = entries[0].contentRect;
@@ -191,4 +283,4 @@ new ResizeObserver(entries => {
 }).observe(container);
 
 // eslint-disable-next-line no-console
-console.log('[renderer] ready — click the Trend line button (slash icon) to start drawing');
+console.log('[renderer] ready — click the Trend line or Rectangle button in the sidebar to start drawing');
