@@ -303,10 +303,13 @@ export class NativeTrendLine {
     }
 
     _requestUpdate() {
-        try {
-            this.chart.timeScale().applyOptions({});
-        } catch (_) {
-            // no-op
-        }
+        // In lightweight-charts v5, the most reliable way to force a
+        // primitive to re-render is to nudge the series.  We call
+        // applyOptions({}) on the chart, time scale, AND series to
+        // be sure the primitive's paneView.renderer() is invoked
+        // again with the latest p1 / p2 values.
+        try { this.chart.applyOptions({}); } catch (_) {}
+        try { this.chart.timeScale().applyOptions({}); } catch (_) {}
+        try { this.series.applyOptions({}); } catch (_) {}
     }
 }

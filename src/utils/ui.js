@@ -32,11 +32,10 @@ export function createUI(chartArea, toolStatus, chart) {
     }
 
     function requestRedraw() {
-        try {
-            chart.timeScale().applyOptions({});
-        } catch (_) {
-            // no-op
-        }
+        // Nudge chart + time scale + series to force every primitive
+        // (preview, committed trendlines, ...) to re-render.
+        try { chart.applyOptions({}); } catch (_) {}
+        try { chart.timeScale().applyOptions({}); } catch (_) {}
     }
 
     return { showStatus, hideStatus, setChartCursor, requestRedraw };

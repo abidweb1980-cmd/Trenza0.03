@@ -22,5 +22,11 @@ export function createState() {
 
         // Active drag operation (set on mousedown, cleared on mouseup)
         drag: null,
+
+        // Crosshair mode for visual feedback.  Set to 'MagnetOHLC'
+        // when the CTRL-snap is active so the chart can render a
+        // highlighted "magnet" crosshair (mirrors TradingView's
+        // Magnet Mode toggle).
+        crosshairMode: 'Normal',
     };
 }

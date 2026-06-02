@@ -8,6 +8,12 @@
 //   3. Wire up top-level events: chart click, crosshair move,
 //      keyboard, and "any other sidebar button deactivates the
 //      drawing tool".
+//
+// The trendline tool itself honours TradingView-style modifier keys:
+//   • SHIFT held  →  angle-lock the second anchor to the closest 45°
+//   • CTRL  held  →  magnet-snap the second anchor to the nearest
+//                    candlestick OHLC value
+// (see src/utils/trendlineTool.js + src/utils/chartSnap.js)
 
 import { CandlestickSeries, createChart, CrosshairMode } from 'lightweight-charts';
 
@@ -18,6 +24,11 @@ import { createPreviewManager } from './utils/previewManager.js';
 import { createTrendlineManager } from './utils/trendlineManager.js';
 import { createTrendlineTool } from './utils/trendlineTool.js';
 import { createTrendlineInteraction } from './utils/trendlineInteraction.js';
+import { extendWithDummies } from './utils/dataExtension.js';
+
+// How many dummy candles to prepend/append so the user can draw
+// trendlines outside the real data range.
+const DUMMY_COUNT = 300;
 
 // ---------- DOM elements ----------
 const container = document.getElementById('chart-container');
@@ -51,12 +62,23 @@ async function loadChartData() {
         const response = await fetch('./src/data/sample.json');
         if (!response.ok) throw new Error(`Failed to load data: ${response.statusText}`);
         const rawData = await response.json();
-        const formattedData = rawData.map(candle => ({
+        const realCount = rawData.length;
+
+        // Extend the dataset with dummy candles on both sides.
+        const extended = extendWithDummies(rawData, DUMMY_COUNT);
+
+        const formattedData = extended.map(candle => ({
             time: candle.timestamp / 1000,
             open: candle.open, high: candle.high, low: candle.low, close: candle.close,
         }));
         candlestickSeries.setData(formattedData);
-        chart.timeScale().fitContent();
+
+        // Focus the visible range on the real candles (with padding).
+        const leadingDummies = DUMMY_COUNT;
+        const pad = 5;
+        const fromIdx = Math.max(0, leadingDummies - pad);
+        const toIdx = leadingDummies + realCount - 1 + pad;
+        chart.timeScale().setVisibleLogicalRange({ from: fromIdx, to: toIdx });
     } catch (error) {
         console.error('Error loading chart candles:', error);
     }
@@ -104,6 +126,7 @@ document.querySelectorAll('.sidebar-btn').forEach(btn => {
 chart.subscribeClick((param) => drawingTool.handleChartClick(param));
 
 // Crosshair move keeps the preview line tracking the cursor.
+// (SHIFT/CTRL snap is handled inside drawingTool.handleCrosshairMove.)
 chart.subscribeCrosshairMove((param) => drawingTool.handleCrosshairMove(param));
 
 // Keyboard shortcuts.
@@ -127,3 +150,6 @@ new ResizeObserver(entries => {
     const { width, height } = entries[0].contentRect;
     chart.resize(width, height);
 }).observe(container);
+
+// eslint-disable-next-line no-console
+console.log('[renderer] ready — click the Trend line button (slash icon) to start drawing');
