@@ -55,6 +55,40 @@ const candlestickSeries = chart.addSeries(CandlestickSeries, {
     borderVisible: false, wickUpColor: '#26a69a', wickDownColor: '#ef5350',
 });
 
+// -------------------------------------------------------------------------
+// Global modifier-key → chart crosshair mode toggle.
+//
+// TradingView's chart library has a built-in CrosshairMode.MagnetOHLC
+// option that draws a stronger crosshair on the OHLC value of the
+// candle under the cursor.  We switch into that mode whenever CTRL
+// is held and back to Normal when it is released.  This gives the
+// user a clear visual cue that the magnet snap is active.
+// -------------------------------------------------------------------------
+function setChartCrosshairMode(mode) {
+    try {
+        chart.applyOptions({ crosshair: { mode } });
+        console.log('[renderer] chart.crosshair.mode →', mode);
+    } catch (e) {
+        console.warn('[renderer] failed to set crosshair mode:', e);
+    }
+}
+
+window.addEventListener('keydown', (e) => {
+    if (e.key === 'Control' && !e.repeat) {
+        setChartCrosshairMode(CrosshairMode.MagnetOHLC);
+    }
+});
+window.addEventListener('keyup', (e) => {
+    if (e.key === 'Control') {
+        setChartCrosshairMode(CrosshairMode.Normal);
+    }
+});
+// Safety: if the window loses focus while CTRL is held, make sure
+// we reset the crosshair when CTRL is released outside the window.
+window.addEventListener('blur', () => {
+    setChartCrosshairMode(CrosshairMode.Normal);
+});
+
 loadChartData();
 
 async function loadChartData() {

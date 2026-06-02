@@ -281,3 +281,120 @@ export function resolveDragSnap({ chart, series, cursorPx, targets, otherAnchor,
     }
     return { x: cursorPx.x, y: cursorPx.y, mode: 'free' };
 }
+
+// ============================================================================
+// UNIVERSAL POINT TRANSLATOR
+// ============================================================================
+//
+// One function, one source of truth, used by every entry-point that needs
+// to resolve a "where is the second anchor right now" pixel point:
+//
+//   • the in-progress draw (handleCrosshairMove)        → "crosshair"
+//   • the first click of a new line                    → "click-first"
+//   • a drag of an existing line\'s endpoint            → "drag-endpoint"
+//
+// It takes the raw input (param or cursor pixels), the modifier-key
+// state, and a small `context` blob that fills in the gaps:
+//
+//   context = {
+//     mode: "crosshair" | "click-first" | "drag-endpoint",
+//
+//     // For angle-snap (SHIFT): the OTHER endpoint, in (time,price).
+//     // For "crosshair" mode this is the first anchor of the new line.
+//     // For "drag-endpoint" mode this is the endpoint NOT being dragged.
+//     // For "click-first" mode it\'s ignored (no angle origin yet).
+//     otherAnchor: { time, price } | null,
+//
+//     // For "click-first" mode, optional first-time flag.
+//     isFirst: boolean,
+//   }
+//
+// Returns:
+//   { x, y, mode, info, time, price }
+//   where mode is "free" | "angle-45" | "magnet-ohlc"
+//
+// Everything downstream (handleChartClick, handleCrosshairMove,
+// trendlineInteraction.onMouseMove) goes through this one function.
+
+/**
+ * @param {object} opts
+ * @param {object} opts.chart
+ * @param {object} opts.series
+ * @param {{x:number, y:number}} opts.rawPx        – raw mouse position
+ * @param {Array}  opts.targets                     – candle-pixel targets
+ * @param {boolean} opts.shift
+ * @param {boolean} opts.ctrl
+ * @param {object}  opts.context
+ * @returns {{x:number, y:number, mode:string, info:object, time:any, price:number}}
+ */
+export function resolvePoint({ chart, series, rawPx, targets, shift, ctrl, context }) {
+    const ctx = context || { mode: "crosshair", otherAnchor: null, isFirst: false };
+
+    // ----- 1) Modifier-key priority (SHIFT > CTRL, like TradingView) -----
+    if (shift && ctx.otherAnchor) {
+        // 45° lock relative to the other anchor
+        const otherPx = {
+            x: chart.timeScale().timeToCoordinate(ctx.otherAnchor.time),
+            y: series.priceToCoordinate(ctx.otherAnchor.price),
+        };
+        if (otherPx.x !== null && otherPx.y !== null) {
+            const r = snapAngle45(otherPx, rawPx);
+            const time  = chart.timeScale().coordinateToTime(r.x);
+            const price = series.coordinateToPrice(r.y);
+            return {
+                x: r.x, y: r.y,
+                mode: "angle-45",
+                info: { angleDeg: r.angleDeg, source: ctx.mode },
+                time, price,
+            };
+        }
+    }
+
+    if (ctrl) {
+        // OHLC magnet on the candle under the cursor.
+        const t = chart.timeScale().coordinateToTime(rawPx.x);
+        if (t !== null && t !== undefined && targets) {
+            const candle = targets.find(c => c.time === t);
+            if (candle) {
+                const cursorPrice = series.coordinateToPrice(rawPx.y);
+                if (cursorPrice !== null && cursorPrice !== undefined) {
+                    const ohlc = [
+                        ["open",  candle.openPrice,  candle.open],
+                        ["high",  candle.highPrice,  candle.high],
+                        ["low",   candle.lowPrice,   candle.low],
+                        ["close", candle.closePrice, candle.close],
+                    ];
+                    let bestField = ohlc[0][0];
+                    let bestPrice = ohlc[0][1];
+                    let bestY     = ohlc[0][2];
+                    let bestDist  = Math.abs(cursorPrice - ohlc[0][1]);
+                    for (let i = 1; i < ohlc.length; i++) {
+                        const d = Math.abs(cursorPrice - ohlc[i][1]);
+                        if (d < bestDist) {
+                            bestDist  = d;
+                            bestField = ohlc[i][0];
+                            bestPrice = ohlc[i][1];
+                            bestY     = ohlc[i][2];
+                        }
+                    }
+                    return {
+                        x: candle.x, y: bestY,
+                        mode: "magnet-ohlc",
+                        info: { field: bestField, candleIndex: candle.index, price: bestPrice, source: ctx.mode },
+                        time: candle.time, price: bestPrice,
+                    };
+                }
+            }
+        }
+    }
+
+    // ----- 2) Free (no modifier, or modifier produced no result) -----
+    const time  = chart.timeScale().coordinateToTime(rawPx.x);
+    const price = series.coordinateToPrice(rawPx.y);
+    return {
+        x: rawPx.x, y: rawPx.y,
+        mode: "free",
+        info: { source: ctx.mode },
+        time, price,
+    };
+}

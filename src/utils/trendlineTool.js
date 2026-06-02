@@ -22,8 +22,7 @@
 //                      5. state.crosshairMode is set to 'MagnetOHLC'
 //                         so the chart can render the visual cue.
 
-import { buildCandlePixelTargets, snapAngle45, snapToCandleOHLC,
-         resolveFirstAnchor } from './chartSnap.js';
+import { buildCandlePixelTargets, resolvePoint } from './chartSnap.js';
 
 /**
  * Build a trendline drawing tool controller.
@@ -147,9 +146,13 @@ export function createTrendlineTool({
         const shift = !!(src && src.shiftKey)   || shiftDown;
         const ctrl  = !!(src && src.ctrlKey)    || ctrlDown;
 
-        // 1) Resolve the clicked anchor (raw OR snapped).
-        const first = resolveFirstAnchor({
-            chart, series, param, targets: candleTargets, shift, ctrl,
+        // 1) Resolve the clicked anchor via the universal translator.
+        const first = resolvePoint({
+            chart, series,
+            rawPx: { x: param.point.x, y: param.point.y },
+            targets: candleTargets,
+            shift, ctrl,
+            context: { mode: 'click-first', otherAnchor: null, isFirst: true },
         });
         const clickedTime  = first.time;
         const clickedPrice = first.price;
@@ -243,34 +246,27 @@ export function createTrendlineTool({
         let snapY = cursorPx.y;
         let modeLabel = 'free';
 
-        if (shift) {
-            const r = snapAngle45(firstPx, cursorPx);
-            snapX = r.x;
-            snapY = r.y;
-            modeLabel = `SHIFT ${r.angleDeg}°`;
+        // Universal point translator
+        const r = resolvePoint({
+            chart, series,
+            rawPx: cursorPx,
+            targets: candleTargets,
+            shift, ctrl,
+            context: { mode: 'crosshair', otherAnchor: state.drawingFirstPoint, isFirst: false },
+        });
+        snapX = r.x; snapY = r.y;
+        if (r.mode === 'angle-45') {
+            modeLabel = `SHIFT ${r.info.angleDeg}°`;
             setCrosshairMode('Normal');
-            console.log('[trendline] SHIFT snap →', modeLabel,
-                '| raw(', cursorPx.x|0, ',', cursorPx.y|0, ')',
-                '→ snapped(', snapX|0, ',', snapY|0, ')');
-        } else if (ctrl) {
-            const snap = snapToCandleOHLC({
-                chart, series, param, targets: candleTargets,
-            });
-            if (snap) {
-                snapX = snap.x;
-                snapY = snap.y;
-                modeLabel = `CTRL magnet candle #${snap.candleIndex} ${snap.field}`;
-                setCrosshairMode('MagnetOHLC');
-                console.log('[trendline] CTRL snap →', modeLabel,
-                    '| raw(', cursorPx.x|0, ',', cursorPx.y|0, ')',
-                    '→ snapped(', snapX|0, ',', snapY|0, ') @ price', snap.price);
-            } else {
-                console.log('[trendline] CTRL snap returned NULL (no candle at param.time=', param.time, ')');
-                setCrosshairMode('Normal');
-            }
+        } else if (r.mode === 'magnet-ohlc') {
+            modeLabel = `CTRL magnet candle #${r.info.candleIndex} ${r.info.field}`;
+            setCrosshairMode('MagnetOHLC');
         } else {
+            modeLabel = 'free';
             setCrosshairMode('Normal');
         }
+        console.log('[trendline]', modeLabel, '| raw(', cursorPx.x|0, ',', cursorPx.y|0, ')',
+            '→ snapped(', snapX|0, ',', snapY|0, ')');
 
         // 4) Update the preview with the (possibly snapped) pixel.
         preview.update(snapX, snapY);

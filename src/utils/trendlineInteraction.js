@@ -8,8 +8,7 @@
 //   • CTRL   → magnet-snap the anchor to the nearest OHLC of the
 //              candle under the cursor
 
-import { resolveDragSnap } from "./chartSnap.js";
-import { buildCandlePixelTargets } from "./chartSnap.js";
+import { resolvePoint, buildCandlePixelTargets } from "./chartSnap.js";
 
 /**
  * Build a trendline interaction controller.
@@ -103,30 +102,25 @@ export function createTrendlineInteraction({
             const ctrl  = !!evt.ctrlKey  || (typeof getCtrlDown  === "function" && getCtrlDown());
 
             if (d.target === 'p1' || d.target === 'p2') {
-                // Anchor drag – apply SHIFT/CTRL snap relative to
-                // the OTHER anchor and the candle under the cursor.
-                let snapX = x, snapY = y;
-                if (shift || ctrl) {
-                    refreshTargetsIfNeeded();
-                    const otherAnchor = d.target === 'p1' ? d.trendLine.p2 : d.trendLine.p1;
-                    const snap = resolveDragSnap({
-                        chart, series,
-                        cursorPx: { x, y },
-                        targets:  myTargets,
-                        otherAnchor,
-                        shift, ctrl,
-                    });
-                    if (snap && (snap.x !== x || snap.y !== y)) {
-                        snapX = snap.x;
-                        snapY = snap.y;
-                        console.log("[trendlineInteraction] DRAG snap",
-                            shift ? "SHIFT" : "CTRL",
-                            "→", snap.mode, snap.info || "",
-                            "| raw(", x|0, ",", y|0, ")",
-                            "→ snapped(", snapX|0, ",", snapY|0, ")");
-                    }
+                // Anchor drag – go through the universal point
+                // translator.  The "other anchor" is whichever
+                // endpoint is NOT being dragged.
+                refreshTargetsIfNeeded();
+                const otherAnchor = d.target === 'p1' ? d.trendLine.p2 : d.trendLine.p1;
+                const r = resolvePoint({
+                    chart, series,
+                    rawPx: { x, y },
+                    targets: myTargets,
+                    shift, ctrl,
+                    context: { mode: 'drag-endpoint', otherAnchor, isFirst: false },
+                });
+                if (r.mode !== 'free') {
+                    console.log('[trendlineInteraction] DRAG',
+                        shift ? 'SHIFT' : 'CTRL', '→', r.mode, r.info || '',
+                        '| raw(', x|0, ',', y|0, ')',
+                        '→ snapped(', r.x|0, ',', r.y|0, ')');
                 }
-                d.trendLine.movePointToPixel(d.target, snapX, snapY);
+                d.trendLine.movePointToPixel(d.target, r.x, r.y);
             } else if (d.target === 'line') {
                 // Whole-line translation.  Apply CTRL magnet to the
                 // delta so the line snaps to a candle.
