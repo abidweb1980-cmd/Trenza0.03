@@ -210,3 +210,74 @@ export function resolveFirstAnchor({ chart, series, param, targets, shift, ctrl 
         info:  {},
     };
 }
+
+/**
+ * Resolve the snapped pixel point for an anchor DRAG (i.e. moving
+ * p1 or p2 of an already-committed trendline).  Same algorithms
+ * as the drawing flow:
+ *   • SHIFT → 45° lock relative to the OTHER anchor
+ *   • CTRL  → magnet to the nearest OHLC of the candle under the
+ *             cursor (uses the current mouse x → time)
+ *
+ * @param {object}  opts
+ * @param {object}  opts.chart
+ * @param {object}  opts.series
+ * @param {{x:number, y:number}} opts.cursorPx
+ * @param {Array}   opts.targets
+ * @param {{time:any, price:number}} opts.otherAnchor
+ *              the *other* endpoint of the line – used as the angle
+ *              origin for SHIFT
+ * @param {boolean} opts.shift
+ * @param {boolean} opts.ctrl
+ * @returns {{x:number, y:number, mode:string, info?:object}}
+ */
+export function resolveDragSnap({ chart, series, cursorPx, targets, otherAnchor, shift, ctrl }) {
+    if (shift) {
+        // 45° lock relative to the other anchor.
+        const otherPx = {
+            x: chart.timeScale().timeToCoordinate(otherAnchor.time),
+            y: series.priceToCoordinate(otherAnchor.price),
+        };
+        if (otherPx.x === null || otherPx.y === null) {
+            return { x: cursorPx.x, y: cursorPx.y, mode: 'free' };
+        }
+        const r = snapAngle45(otherPx, cursorPx);
+        return { x: r.x, y: r.y, mode: 'angle-45', info: { angleDeg: r.angleDeg } };
+    }
+    if (ctrl) {
+        // OHLC magnet on the candle under the cursor's x.
+        const t = chart.timeScale().coordinateToTime(cursorPx.x);
+        if (t === null || t === undefined) {
+            return { x: cursorPx.x, y: cursorPx.y, mode: 'free' };
+        }
+        const candle = targets ? targets.find(c => c.time === t) : null;
+        if (!candle) {
+            return { x: cursorPx.x, y: cursorPx.y, mode: 'free' };
+        }
+        const cursorPrice = series.coordinateToPrice(cursorPx.y);
+        if (cursorPrice === null || cursorPrice === undefined) {
+            return { x: cursorPx.x, y: cursorPx.y, mode: 'free' };
+        }
+        const ohlc = [
+            ['open',  candle.openPrice,  candle.open],
+            ['high',  candle.highPrice,  candle.high],
+            ['low',   candle.lowPrice,   candle.low],
+            ['close', candle.closePrice, candle.close],
+        ];
+        let bestField = ohlc[0][0];
+        let bestPrice = ohlc[0][1];
+        let bestY     = ohlc[0][2];
+        let bestDist  = Math.abs(cursorPrice - ohlc[0][1]);
+        for (let i = 1; i < ohlc.length; i++) {
+            const d = Math.abs(cursorPrice - ohlc[i][1]);
+            if (d < bestDist) { bestDist = d; bestField = ohlc[i][0]; bestPrice = ohlc[i][1]; bestY = ohlc[i][2]; }
+        }
+        return {
+            x: candle.x,
+            y: bestY,
+            mode: 'magnet-ohlc',
+            info: { field: bestField, candleIndex: candle.index, price: bestPrice },
+        };
+    }
+    return { x: cursorPx.x, y: cursorPx.y, mode: 'free' };
+}

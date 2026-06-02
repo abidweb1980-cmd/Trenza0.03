@@ -113,6 +113,11 @@ createTrendlineInteraction({
     ui,
     chartLock,
     trendlines,
+    chart,
+    series: candlestickSeries,
+    getSnapTargets: () => drawingTool.getSnapTargets(),
+    getShiftDown:  () => drawingTool.getShiftDown(),
+    getCtrlDown:   () => drawingTool.getCtrlDown(),
 });
 
 // ---------- 3. Wire up top-level events ----------

@@ -332,5 +332,8 @@ export function createTrendlineTool({
         handleCrosshairMove,
         cancelInProgress,
         isActive: () => state.mode === 'drawing',
+        getSnapTargets: () => candleTargets,
+        getShiftDown: () => shiftDown,
+        getCtrlDown:  () => ctrlDown,
     };
 }
