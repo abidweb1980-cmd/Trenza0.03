@@ -3,24 +3,22 @@
 // Responsibilities:
 //   1. Build the lightweight-charts chart and load sample data.
 //   2. Construct the helper modules (state, UI, chart lock,
-//      preview manager, trendline manager, drawing tool,
-//      interaction controller).
+//      preview manager, trendline/rectangle/fibonacci manager,
+//      drawing tools, interaction controllers).
 //   3. Wire up top-level events: chart click, crosshair move,
 //      keyboard, and "any other sidebar button deactivates the
-//      drawing tool".
+//      active drawing tool".
 //
-// Both the trendline tool and the rectangle tool honour
+// All three drawing tools (trendline, rectangle, fibonacci) honour
 // TradingView-style modifier keys:
 //   • SHIFT held  →  angle-lock the second anchor to the closest 45°
 //   • CTRL  held  →  magnet-snap the second anchor to the nearest
 //                    candlestick OHLC value
-// (see src/utils/trendlineTool.js + src/utils/rectangleTool.js
-//  + src/utils/chartSnap.js)
 
 import { CandlestickSeries, createChart, CrosshairMode } from 'lightweight-charts';
 import 'bootstrap-icons/font/bootstrap-icons.min.css';
 
-import { createState, TRENDLINE_COLOR, RECTANGLE_COLOR } from './utils/state.js';
+import { createState, TRENDLINE_COLOR, RECTANGLE_COLOR, FIBONACCI_COLOR } from './utils/state.js';
 import { createUI } from './utils/ui.js';
 import { createChartLock } from './utils/chartLock.js';
 import { createPreviewManager } from './utils/previewManager.js';
@@ -31,10 +29,12 @@ import { createRectangleManager } from './utils/rectangleManager.js';
 import { createRectanglePreview } from './utils/rectanglePreview.js';
 import { createRectangleTool } from './utils/rectangleTool.js';
 import { createRectangleInteraction } from './utils/rectangleInteraction.js';
+import { createFibonacciManager } from './utils/fibonacciManager.js';
+import { createFibonacciPreview } from './utils/fibonacciPreview.js';
+import { createFibonacciTool } from './utils/fibonacciTool.js';
+import { createFibonacciInteraction } from './utils/fibonacciInteraction.js';
 import { extendWithDummies } from './utils/dataExtension.js';
 
-// How many dummy candles to prepend/append so the user can draw
-// trendlines outside the real data range.
 const DUMMY_COUNT = 300;
 
 // ---------- DOM elements ----------
@@ -43,6 +43,7 @@ const chartArea = document.getElementById('chart-area');
 const toolStatus = document.getElementById('tool-status');
 const trendlineToolBtn = document.getElementById('trendline-tool');
 const rectangleToolBtn = document.getElementById('rectangle-tool');
+const fibonacciToolBtn = document.getElementById('fibonacci-tool');
 
 // ---------- 1. Chart + series ----------
 const chart = createChart(container, {
@@ -63,15 +64,6 @@ const candlestickSeries = chart.addSeries(CandlestickSeries, {
     borderVisible: false, wickUpColor: '#26a69a', wickDownColor: '#ef5350',
 });
 
-// -------------------------------------------------------------------------
-// Global modifier-key → chart crosshair mode toggle.
-//
-// TradingView's chart library has a built-in CrosshairMode.MagnetOHLC
-// option that draws a stronger crosshair on the OHLC value of the
-// candle under the cursor.  We switch into that mode whenever CTRL
-// is held and back to Normal when it is released.  This gives the
-// user a clear visual cue that the magnet snap is active.
-// -------------------------------------------------------------------------
 function setChartCrosshairMode(mode) {
     try {
         chart.applyOptions({ crosshair: { mode } });
@@ -91,8 +83,6 @@ window.addEventListener('keyup', (e) => {
         setChartCrosshairMode(CrosshairMode.Normal);
     }
 });
-// Safety: if the window loses focus while CTRL is held, make sure
-// we reset the crosshair when CTRL is released outside the window.
 window.addEventListener('blur', () => {
     setChartCrosshairMode(CrosshairMode.Normal);
 });
@@ -106,7 +96,6 @@ async function loadChartData() {
         const rawData = await response.json();
         const realCount = rawData.length;
 
-        // Extend the dataset with dummy candles on both sides.
         const extended = extendWithDummies(rawData, DUMMY_COUNT);
 
         const formattedData = extended.map(candle => ({
@@ -115,7 +104,6 @@ async function loadChartData() {
         }));
         candlestickSeries.setData(formattedData);
 
-        // Focus the visible range on the real candles (with padding).
         const leadingDummies = DUMMY_COUNT;
         const pad = 5;
         const fromIdx = Math.max(0, leadingDummies - pad);
@@ -194,46 +182,86 @@ createRectangleInteraction({
     getCtrlDown:   () => rectangleDrawingTool.getCtrlDown(),
 });
 
-// ---------- 5. Cross-tool deactivation ----------
-//
-// We have two drawing tools (trendline + rectangle).  Activating
-// one should deactivate the other so they don't fight.  We do
-// this with explicit per-button listeners that ONLY call
-// deactivate() if the other tool is actually active.  (Using
-// `isActive()` is important: an unconditional deactivate() would
-// wipe out the global state — `state.mode`, `chartLock`, etc. —
-// even when no drawing tool is active, breaking subsequent
-// activation of any tool.)
-trendlineToolBtn.addEventListener('click', () => {
-    if (rectangleDrawingTool.isActive()) rectangleDrawingTool.deactivate();
-});
-rectangleToolBtn.addEventListener('click', () => {
-    if (drawingTool.isActive()) drawingTool.deactivate();
-});
-
-// ---------- 6. Wire up top-level events ----------
-//
-// Deactivate BOTH drawing tools when any other sidebar button is
-// clicked.  Both checks use isActive() so the click on the
-// rectangle button itself (which already activated the rectangle
-// tool) doesn't immediately deactivate it via the trendline's
-// unconditional-deactivate listener.
-document.querySelectorAll('.sidebar-btn').forEach(btn => {
-    if (btn.id === 'rectangle-tool') return;
-    btn.addEventListener('click', () => {
-        if (rectangleDrawingTool.isActive()) rectangleDrawingTool.deactivate();
-    });
+// ---------- 5. Fibonacci tool ----------
+const fibsMgr = createFibonacciManager(
+    chart, candlestickSeries, state, FIBONACCI_COLOR, ui.requestRedraw
+);
+const fibonacciPreview = createFibonacciPreview(
+    chart, candlestickSeries, state, FIBONACCI_COLOR
+);
+const fibonacciDrawingTool = createFibonacciTool({
+    state,
+    toolBtn: fibonacciToolBtn,
+    chart,
+    series: candlestickSeries,
+    ui,
+    chartLock,
+    preview: fibonacciPreview,
+    fibs: fibsMgr,
 });
 
+createFibonacciInteraction({
+    container,
+    state,
+    ui,
+    chartLock,
+    fibs: fibsMgr,
+    chart,
+    series: candlestickSeries,
+    getSnapTargets: () => fibonacciDrawingTool.getSnapTargets(),
+    getShiftDown:  () => fibonacciDrawingTool.getShiftDown(),
+    getCtrlDown:   () => fibonacciDrawingTool.getCtrlDown(),
+});
+
+// ---------- 6. Cross-tool deactivation ----------
+//
+// We have THREE drawing tools (trendline, rectangle, fibonacci).
+// Activating any one should deactivate the other two.  All checks
+// use isActive() so an unconditional deactivate() doesn't wipe
+// out the global state of the just-activated tool.
+//
+// IMPORTANT: when adding a "deactivate X" listener to a sidebar
+// button, we MUST skip X's own button — otherwise clicking that
+// button activates X via its toggle listener, then immediately
+// deactivates it via this loop's listener.
+const DRAWING_TOOL_IDS = ['trendline-tool', 'rectangle-tool', 'fibonacci-tool'];
+
+function deactivateOtherTools(activeToolBtn) {
+    return () => {
+        if (activeToolBtn !== rectangleToolBtn && rectangleDrawingTool.isActive()) {
+            rectangleDrawingTool.deactivate();
+        }
+        if (activeToolBtn !== fibonacciToolBtn && fibonacciDrawingTool.isActive()) {
+            fibonacciDrawingTool.deactivate();
+        }
+        if (activeToolBtn !== trendlineToolBtn && drawingTool.isActive()) {
+            drawingTool.deactivate();
+        }
+    };
+}
+
+trendlineToolBtn.addEventListener('click', deactivateOtherTools(trendlineToolBtn));
+rectangleToolBtn.addEventListener('click', deactivateOtherTools(rectangleToolBtn));
+fibonacciToolBtn.addEventListener('click', deactivateOtherTools(fibonacciToolBtn));
+
+// Any other (non-drawing) sidebar button → deactivate ALL drawing
+// tools.  All checks use isActive() to avoid wiping just-set state.
 document.querySelectorAll('.sidebar-btn').forEach(btn => {
-    if (btn.id === 'trendline-tool') return;
+    if (DRAWING_TOOL_IDS.includes(btn.id)) return;
     btn.addEventListener('click', () => {
         if (drawingTool.isActive()) drawingTool.deactivate();
+        if (rectangleDrawingTool.isActive()) rectangleDrawingTool.deactivate();
+        if (fibonacciDrawingTool.isActive()) fibonacciDrawingTool.deactivate();
     });
 });
 
+// ---------- 7. Wire up top-level events ----------
 // Chart click is consumed by whichever tool is active.
 chart.subscribeClick((param) => {
+    if (fibonacciDrawingTool.isActive()) {
+        fibonacciDrawingTool.handleChartClick(param);
+        return;
+    }
     if (rectangleDrawingTool.isActive()) {
         rectangleDrawingTool.handleChartClick(param);
         return;
@@ -243,6 +271,10 @@ chart.subscribeClick((param) => {
 
 // Crosshair move is routed to the active tool.
 chart.subscribeCrosshairMove((param) => {
+    if (fibonacciDrawingTool.isActive()) {
+        fibonacciDrawingTool.handleCrosshairMove(param);
+        return;
+    }
     if (rectangleDrawingTool.isActive()) {
         rectangleDrawingTool.handleCrosshairMove(param);
         return;
@@ -253,20 +285,27 @@ chart.subscribeCrosshairMove((param) => {
 // Keyboard shortcuts.
 window.addEventListener('keydown', (evt) => {
     if (evt.key === 'Escape') {
-        if (rectangleDrawingTool.isActive()) {
+        if (fibonacciDrawingTool.isActive()) {
+            fibonacciDrawingTool.cancelInProgress();
+            fibonacciDrawingTool.deactivate();
+        } else if (rectangleDrawingTool.isActive()) {
             rectangleDrawingTool.cancelInProgress();
             rectangleDrawingTool.deactivate();
         } else if (drawingTool.isActive()) {
             drawingTool.cancelInProgress();
             drawingTool.deactivate();
+        } else if (state.selectedFib) {
+            fibsMgr.clearSelection();
         } else if (state.selectedRectangle) {
             rectanglesMgr.clearSelection();
         } else if (state.selectedTrendLine) {
             trendlines.clearSelection();
         }
     } else if ((evt.key === 'Delete' || evt.key === 'Backspace')
-               && (state.selectedRectangle || state.selectedTrendLine)) {
-        if (state.selectedRectangle) {
+               && (state.selectedFib || state.selectedRectangle || state.selectedTrendLine)) {
+        if (state.selectedFib) {
+            fibsMgr.remove(state.selectedFib);
+        } else if (state.selectedRectangle) {
             rectanglesMgr.remove(state.selectedRectangle);
         } else if (state.selectedTrendLine) {
             trendlines.remove(state.selectedTrendLine);
@@ -275,7 +314,7 @@ window.addEventListener('keydown', (evt) => {
     }
 });
 
-// ---------- 7. Resize observer ----------
+// ---------- 8. Resize observer ----------
 new ResizeObserver(entries => {
     if (entries.length === 0) return;
     const { width, height } = entries[0].contentRect;
@@ -283,4 +322,4 @@ new ResizeObserver(entries => {
 }).observe(container);
 
 // eslint-disable-next-line no-console
-console.log('[renderer] ready — click the Trend line or Rectangle button in the sidebar to start drawing');
+console.log('[renderer] ready — click the Trend line, Rectangle, or Fibonacci button in the sidebar to start drawing');
