@@ -49,13 +49,27 @@ export function createPreviewManager(chart, series, state, color, requestRedraw)
     }
 
     /**
-     * Hide and forget the preview. (lightweight-charts v5 doesn't
-     * expose a clean detach API, so we simply stop updating it and
-     * mark it invisible.)
+     * Detach the preview from the series and forget it.
+     *
+     * Without detachPrimitive() the preview primitive stays in the
+     * series\'s render list and is re-drawn on every frame — even
+     * though we\'ve set _visible = false.  This caused a ghost line
+     * to appear whenever the chart re-rendered (resize, anchor
+     * drag, etc.) after the trendline was committed.
      */
     function clear() {
         if (!state.previewTrendLine) return;
-        state.previewTrendLine.setVisible(false);
+        try {
+            if (typeof series.detachPrimitive === "function") {
+                series.detachPrimitive(state.previewTrendLine);
+                console.log("[previewManager] detached preview primitive from series");
+            } else {
+                state.previewTrendLine.setVisible(false);
+            }
+        } catch (e) {
+            console.warn("[previewManager] detachPrimitive failed:", e);
+            state.previewTrendLine.setVisible(false);
+        }
         state.previewTrendLine = null;
     }
 

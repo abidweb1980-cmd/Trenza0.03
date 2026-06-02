@@ -65,15 +65,26 @@ export function createTrendlineManager(chart, series, state, color, requestRedra
     }
 
     /**
-     * Remove a trendline from the registry. (Note: lightweight-charts
-     * v5 doesn't expose a clean detach API for attached primitives,
-     * so the visual primitive stays attached but stops being tracked
-     * here. A full removal would require recreating the series.)
+     * Remove a trendline: detach its primitive from the series AND
+     * remove it from the registry.
+     *
+     * Uses lightweight-charts v5 series.detachPrimitive() so the
+     * line is fully removed from the render list (no ghost drawing
+     * on subsequent re-renders).
      */
     function remove(tl) {
+        if (!tl) return;
+        try {
+            if (typeof series.detachPrimitive === "function") {
+                series.detachPrimitive(tl);
+            }
+        } catch (e) {
+            console.warn("[trendlineManager] detachPrimitive failed:", e);
+        }
         const idx = state.trendLines.indexOf(tl);
         if (idx !== -1) state.trendLines.splice(idx, 1);
         if (state.selectedTrendLine === tl) state.selectedTrendLine = null;
+        requestRedraw();
     }
 
     return { create, select, clearSelection, hitTest, remove };

@@ -157,10 +157,22 @@ export function createTrendlineTool({
         if (!state.drawingFirstPoint) {
             state.drawingFirstPoint = { time: clickedTime, price: clickedPrice };
             preview.create(state.drawingFirstPoint);
-            preview.update(param.point.x, param.point.y);
+            // CRITICAL: re-project the SNAPPED (time, price) back to
+            // pixels so the preview's p2 matches the snapped anchor
+            // (not the raw click position).  Without this, the
+            // preview line p1 is snapped but p2 is raw → visually
+            // the line jumps on the first move.
+            const snappedPxX = chart.timeScale().timeToCoordinate(clickedTime);
+            const snappedPxY = series.priceToCoordinate(clickedPrice);
+            if (snappedPxX !== null && snappedPxY !== null) {
+                preview.update(snappedPxX, snappedPxY);
+            } else {
+                preview.update(param.point.x, param.point.y);
+            }
             ui.showStatus('First point set — move the cursor to preview, click to confirm (SHIFT=45°, CTRL=OHLC)');
             console.log('[trendline] first anchor set:', state.drawingFirstPoint, '| mode:', first.mode,
-                '| raw(', param.point.x|0, ',', param.point.y|0, ')');
+                '| raw(', param.point.x|0, ',', param.point.y|0, ')',
+                '→ preview at snapped(', snappedPxX|0, ',', snappedPxY|0, ')');
             // Also cache this as the initial lastResolvedAnchor so the
             // second click (if no movement) commits the same value.
             lastResolvedAnchor = { time: clickedTime, price: clickedPrice, mode: first.mode };
@@ -199,10 +211,12 @@ export function createTrendlineTool({
 
         refreshTargetsIfNeeded();
 
-        // 1) Read modifier keys off the original event.
+        // 1) Read modifier keys off the original event (with global
+        //    fallback so a held-down modifier is detected even if
+        //    the event itself has stale modifier flags).
         const src = param.sourceEvent || null;
-        const shift = !!(src && src.shiftKey);
-        const ctrl  = !!(src && src.ctrlKey);
+        const shift = !!(src && src.shiftKey)   || shiftDown;
+        const ctrl  = !!(src && src.ctrlKey)    || ctrlDown;
 
         // 2) Compute the first anchor's pixel coords.
         const firstPx = {
@@ -211,7 +225,15 @@ export function createTrendlineTool({
         };
         const cursorPx = { x: param.point.x, y: param.point.y };
 
+        console.log('[trendline] === CROSSHAIR MOVE ===',
+            '| shift=', shift, 'ctrl=', ctrl,
+            '| firstAnchor(time,price)=', state.drawingFirstPoint,
+            '| firstPx=', firstPx,
+            '| rawCursorPx=', cursorPx,
+            '| targets=', candleTargets.length);
+
         if (firstPx.x === null || firstPx.y === null) {
+            console.log('[trendline] first anchor off-screen, falling back to raw cursor');
             preview.update(cursorPx.x, cursorPx.y);
             return;
         }
@@ -222,7 +244,6 @@ export function createTrendlineTool({
         let modeLabel = 'free';
 
         if (shift) {
-            // SHIFT wins over CTRL (matches TradingView).
             const r = snapAngle45(firstPx, cursorPx);
             snapX = r.x;
             snapY = r.y;
@@ -232,11 +253,6 @@ export function createTrendlineTool({
                 '| raw(', cursorPx.x|0, ',', cursorPx.y|0, ')',
                 '→ snapped(', snapX|0, ',', snapY|0, ')');
         } else if (ctrl) {
-            // CTRL magnet: use the algorithm from the spec —
-            // 1) find the candle at param.time
-            // 2) translate cursor y → price
-            // 3) pick nearest OHLC of that candle
-            // 4) snap x → candle center, y → OHLC
             const snap = snapToCandleOHLC({
                 chart, series, param, targets: candleTargets,
             });
@@ -249,6 +265,7 @@ export function createTrendlineTool({
                     '| raw(', cursorPx.x|0, ',', cursorPx.y|0, ')',
                     '→ snapped(', snapX|0, ',', snapY|0, ') @ price', snap.price);
             } else {
+                console.log('[trendline] CTRL snap returned NULL (no candle at param.time=', param.time, ')');
                 setCrosshairMode('Normal');
             }
         } else {
@@ -258,7 +275,19 @@ export function createTrendlineTool({
         // 4) Update the preview with the (possibly snapped) pixel.
         preview.update(snapX, snapY);
 
-        // 4b) Cache the resolved anchor in (time, price) space so the
+        // 4b) Read back the actual p2 that the preview ended up with
+        //     and log it, so we can confirm the snap is being applied.
+        const actualP2 = state.previewTrendLine
+            ? {
+                time:  state.previewTrendLine.p2 && state.previewTrendLine.p2.time,
+                price: state.previewTrendLine.p2 && state.previewTrendLine.p2.price,
+            }
+            : null;
+        console.log('[trendline] preview.update called with px=(',
+            snapX|0, ',', snapY|0, ')',
+            '| resulting p2(time,price)=', actualP2);
+
+        // 4c) Cache the resolved anchor in (time, price) space so the
         //     next click commits the SNAPPED value, not the raw click.
         const snapTime = chart.timeScale().coordinateToTime(snapX);
         const snapPrice = series.coordinateToPrice(snapY);
@@ -274,7 +303,6 @@ export function createTrendlineTool({
         if (shift || ctrl) {
             ui.showStatus(modeLabel);
         } else {
-            // While drawing, keep a neutral status text.
             ui.showStatus('First point set — move the cursor to preview, click to confirm');
         }
     }
