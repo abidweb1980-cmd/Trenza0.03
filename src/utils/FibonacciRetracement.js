@@ -132,6 +132,25 @@ export class NativeFibonacciRetracement {
     /**
      * Translate the whole fib by a pixel delta.
      */
+    /** Anchor-at-mousedown translate. */
+    translateByPixelFromAnchor(newAnchorX, newAnchorY) {
+        const newTime  = this.chart.timeScale().coordinateToTime(newAnchorX);
+        const newPrice = this.series.coordinateToPrice(newAnchorY);
+        if (newTime === null || newPrice === null) return;
+        const oldX  = this.chart.timeScale().timeToCoordinate(this.p1.time);
+        const oldX2 = this.chart.timeScale().timeToCoordinate(this.p2.time);
+        this.p1 = { time: newTime, price: newPrice };
+        if (oldX !== null && oldX2 !== null) {
+            const dxPx = newAnchorX - oldX;
+            const newX2 = oldX2 + dxPx;
+            const newTime2 = this.chart.timeScale().coordinateToTime(newX2);
+            if (newTime2 !== null) {
+                this.p2 = { time: newTime2, price: this.p2.price };
+            }
+        }
+        this._requestUpdate();
+        if (this._onChange) this._onChange(this);
+    }
     translateByPixel(dxPx, dyPx) {
         const x1 = this.chart.timeScale().timeToCoordinate(this.p1.time);
         const y1 = this.series.priceToCoordinate(this.p1.price);

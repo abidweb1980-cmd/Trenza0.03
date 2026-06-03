@@ -149,6 +149,25 @@ export class NativeTrendLine {
     /**
      * Translate the whole line by a pixel delta.
      */
+    /** Anchor-at-mousedown translate. */
+    translateByPixelFromAnchor(newAnchorX, newAnchorY) {
+        const newTime  = this.chart.timeScale().coordinateToTime(newAnchorX);
+        const newPrice = this.series.coordinateToPrice(newAnchorY);
+        if (newTime === null || newPrice === null) return;
+        const oldX  = this.chart.timeScale().timeToCoordinate(this.p1.time);
+        const oldX2 = this.chart.timeScale().timeToCoordinate(this.p2.time);
+        this.p1 = { time: newTime, price: newPrice };
+        if (oldX !== null && oldX2 !== null) {
+            const dxPx = newAnchorX - oldX;
+            const newX2 = oldX2 + dxPx;
+            const newTime2 = this.chart.timeScale().coordinateToTime(newX2);
+            if (newTime2 !== null) {
+                this.p2 = { time: newTime2, price: this.p2.price };
+            }
+        }
+        this._requestUpdate();
+        if (this._onChange) this._onChange(this);
+    }
     translateByPixel(dxPx, dyPx, cachedX1 = null, cachedY1 = null) {
         // We accept cached pixel positions for p1 (already computed
         // by the interaction handler) to avoid redundant
