@@ -24,11 +24,14 @@ export class NativeLongPosition {
         this.series = series;
 
         const entry = { time: entryAnchor.time, price: entryAnchor.price };
-        const riskDistance = Math.max(entry.price * 0.01, 0.0001);
         this.entry = entry;
-        this.tp = entry.price + 2 * riskDistance;
-        this.sl = entry.price - 1 * riskDistance;
-        this.endBarDelta = 30;
+        
+        // Use small fixed distance initially (will be adjusted in resizeToFitVisibleArea)
+        // For prices around 1900, typical tick size is 0.01, so use small multipliers
+        const tickDistance = 10; // 10 ticks up/down from entry
+        this.tp = entry.price + 2 * tickDistance * 0.01; // 2R reward (20 ticks up)  
+        this.sl = entry.price - 1 * tickDistance * 0.01; // 1R risk (10 ticks down)
+        this.endBarDelta = 20;
         this.endTime = null;
 
         this.color = color;
@@ -89,27 +92,23 @@ export class NativeLongPosition {
         let xRight = this.endTime != null
             ? this.chart.timeScale().timeToCoordinate(this.endTime)
             : null;
+            
         if (xRight === null || xRight === undefined) {
-            try {
-                let i = 0;
-                let t = this.entry.time;
-                let idx = null;
-                let safety = 0;
-                while (safety++ < 100000) {
-                    const c = this.series.dataByIndex(i);
-                    if (!c) break;
-                    if (c.time === this.entry.time) { idx = i; break; }
-                    i++;
+            // Dynamic right edge: use ~20% of visible chart width
+            const visibleRange = this.chart.timeScale().getVisibleLogicalRange();
+            const containerWidth = this.chart.chartElement ? this.chart.chartElement().clientWidth : 800;
+            
+            // Calculate target width as percentage of visible range
+            const targetWidthPx = Math.round(containerWidth * 0.2);
+            xRight = xEntry + targetWidthPx;
+            
+            // Convert to time for endTime tracking
+            if (visibleRange) {
+                const timeAtRight = this.chart.timeScale().coordinateToTime(xRight);
+                if (timeAtRight !== null) {
+                    this.endTime = timeAtRight;
                 }
-                if (idx !== null) {
-                    const c2 = this.series.dataByIndex(idx + this.endBarDelta);
-                    if (c2) t = c2.time;
-                }
-                xRight = this.chart.timeScale().timeToCoordinate(t);
-            } catch (_) { xRight = null; }
-        }
-        if (xRight === null || xRight === undefined) {
-            xRight = xEntry + 30 * 8;
+            }
         }
 
         return {
