@@ -33,7 +33,7 @@ export function snapToAngle(start, cursor, angleStep = Math.PI / 4) {
         x: start.x + length * Math.cos(snapped),
         y: start.y + length * Math.sin(snapped),
         angle: snapped,
-        snapped: true,
+        snapped: true,//ok
     };
 }
 
