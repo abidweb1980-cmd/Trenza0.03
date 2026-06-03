@@ -19,18 +19,23 @@ const DEFAULTS = {
 };
 
 export class NativeLongPosition {
-    constructor(chart, series, entryAnchor, color = '#26a69a', onChange = null, onSelect = null, volatilityBasedRiskDistance = null) {
+    constructor(chart, series, entryAnchor, color = '#26a69a', onChange = null, onSelect = null, tpSlOptions = null) {
         this.chart = chart;
         this.series = series;
 
         const entry = { time: entryAnchor.time, price: entryAnchor.price };
         this.entry = entry;
         
-        // Use volatility-based risk distance, or fallback to conservative defaults
-        const riskDistance = volatilityBasedRiskDistance || Math.max(entry.price * 0.001, 0.01);
+        // Use provided TP/SL or calculate defaults that fit in visible range
+        if (tpSlOptions && tpSlOptions.tp != null && tpSlOptions.sl != null) {
+            this.tp = tpSlOptions.tp;
+            this.sl = tpSlOptions.sl;
+        } else {
+            // Conservative defaults
+            this.tp = entry.price + 0.50; // 50 ticks up
+            this.sl = entry.price - 0.50; // 50 ticks down
+        }
         
-        this.tp = entry.price + 2 * riskDistance; // 2R reward
-        this.sl = entry.price - 1 * riskDistance; // 1R risk
         this.endBarDelta = 20;
         this.endTime = null;
 
