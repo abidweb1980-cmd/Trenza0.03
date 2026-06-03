@@ -19,18 +19,18 @@ const DEFAULTS = {
 };
 
 export class NativeLongPosition {
-    constructor(chart, series, entryAnchor, color = '#26a69a', onChange = null, onSelect = null) {
+    constructor(chart, series, entryAnchor, color = '#26a69a', onChange = null, onSelect = null, volatilityBasedRiskDistance = null) {
         this.chart = chart;
         this.series = series;
 
         const entry = { time: entryAnchor.time, price: entryAnchor.price };
         this.entry = entry;
         
-        // Use small fixed distance initially (will be adjusted in resizeToFitVisibleArea)
-        // For prices around 1900, typical tick size is 0.01, so use small multipliers
-        const tickDistance = 10; // 10 ticks up/down from entry
-        this.tp = entry.price + 2 * tickDistance * 0.01; // 2R reward (20 ticks up)  
-        this.sl = entry.price - 1 * tickDistance * 0.01; // 1R risk (10 ticks down)
+        // Use volatility-based risk distance, or fallback to conservative defaults
+        const riskDistance = volatilityBasedRiskDistance || Math.max(entry.price * 0.001, 0.01);
+        
+        this.tp = entry.price + 2 * riskDistance; // 2R reward
+        this.sl = entry.price - 1 * riskDistance; // 1R risk
         this.endBarDelta = 20;
         this.endTime = null;
 

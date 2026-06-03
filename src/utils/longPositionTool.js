@@ -70,11 +70,11 @@ export function createLongPositionTool({
         else activate();
     }
 
-    /**
-     * Single-click placement.  The first (and only) click sets the
-     * entry; the tool then exits drawing mode and the freshly
-     * placed position is auto-selected.
-     */
+/**
+      * Single-click placement.  The first (and only) click sets the
+      * entry; the tool then exits drawing mode and the freshly
+      * placed position is auto-selected.
+      */
     function handleChartClick(param) {
         if (state.mode !== 'long-position-drawing') return false;
         if (!param.time || !param.point) return true;
@@ -94,11 +94,44 @@ export function createLongPositionTool({
             shift, ctrl,
             context: { mode: 'click-first', otherAnchor: null, isFirst: true },
         });
-        const entryAnchor = { time: r.time, price: r.price };
-
-        longPositions.create(entryAnchor);
+        
+        // Calculate volatility-based TP/SL
+        const entryPrice = r.price;
+        const entryAnchor = { time: r.time, price: entryPrice };
+        
+        // Calculate average candle range (high-low) for visible data to estimate volatility
+        let avgCandleRange = 0.01; // Default fallback
+        try {
+            const visibleRange = chart.timeScale().getVisibleLogicalRange();
+            if (visibleRange) {
+                let totalRange = 0;
+                let count = 0;
+                const startIdx = Math.max(0, Math.floor(visibleRange.from));
+                const endIdx = Math.min(1000, Math.floor(visibleRange.to));
+                
+                for (let i = startIdx; i < endIdx && count < 100; i++) {
+                    const bar = series.dataByIndex(i - startIdx);
+                    if (bar && bar.high != null && bar.low != null) {
+                        totalRange += bar.high - bar.low;
+                        count++;
+                    }
+                }
+                if (count > 0) {
+                    avgCandleRange = totalRange / count;
+                }
+            }
+        } catch (_) {
+            // Use fallback on error
+        }
+        
+        // Calculate risk distance: roughly 2x average candle range (typical RR)
+        // This makes the trade fit well within the visible chart area
+        const riskDistance = Math.max(avgCandleRange * 1.5, 0.01);
+        
+        // Create position with volatility-based sizing
+        longPositions.create(entryAnchor, riskDistance);
         ui.showStatus('Long position placed — drag the TP/SL handles to fine-tune, or press Esc to exit');
-        console.log('[longposition] placed at', entryAnchor, '| mode:', r.mode);
+        console.log('[longposition] placed at', entryAnchor, '| volatility:', avgCandleRange, '| mode:', r.mode);
 
         // Auto-exit drawing mode so the user can interact normally
         // with the freshly placed position.

@@ -7,11 +7,12 @@
 import { NativeLongPosition } from './LongPosition.js';
 
 export function createLongPositionManager(chart, series, state, color, requestRedraw) {
-    function create(entryAnchor) {
+    function create(entryAnchor, volatilityBasedRiskDistance = null) {
         const lp = new NativeLongPosition(
             chart, series, entryAnchor, color,
             () => { requestRedraw(); },
-            (sel) => { select(sel); }
+            (sel) => { select(sel); },
+            volatilityBasedRiskDistance
         );
         series.attachPrimitive(lp);
         state.longPositions.push(lp);
