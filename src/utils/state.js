@@ -3,13 +3,15 @@
 export const TRENDLINE_COLOR = '#ffeb3b';
 export const RECTANGLE_COLOR = '#2962ff';
 export const FIBONACCI_COLOR = '#2962ff';
+export const LONG_POSITION_COLOR = '#26a69a';
 
 export function createState() {
     return {
-        // 'idle'                - no tool active
-        // 'drawing'             - trendline tool active
-        // 'rectangle-drawing'   - rectangle tool active
-        // 'fibonacci-drawing'   - fibonacci tool active
+        // 'idle'                 - no tool active
+        // 'drawing'              - trendline tool active
+        // 'rectangle-drawing'    - rectangle tool active
+        // 'fibonacci-drawing'    - fibonacci tool active
+        // 'long-position-drawing' - long position tool active
         mode: 'idle',
 
         // First point placed while in drawing mode
@@ -24,16 +26,22 @@ export function createState() {
         selectedTrendLine: null,
         selectedRectangle: null,
         selectedFib: null,
+        selectedLongPosition: null,
 
         // All primitives on the chart
         trendLines: [],
         rectangles: [],
         fibs: [],
+        longPositions: [],
 
         // Active drag operation
         drag: null,
 
         // Crosshair mode for visual feedback.
         crosshairMode: 'Normal',
+
+        // Current symbol/timeframe (used for visibility checks)
+        currentSymbol: 'AAPL',
+        currentTimeframe: 'D',
     };
 }

@@ -340,8 +340,17 @@ export class NativeFibonacciRetracement {
     _dist(ax, ay, bx, by) { return Math.hypot(ax - bx, ay - by); }
 
     _requestUpdate() {
-        try { this.chart.applyOptions({}); }            catch (_) {}
-        try { this.chart.timeScale().applyOptions({}); }catch (_) {}
-        try { this.series.applyOptions({}); }           catch (_) {}
+        // Throttled redraw: batch multiple data changes within a
+        // single animation frame into ONE chart redraw.  This is
+        // the main fix for x-axis drag lag — without this, every
+        // mousemove event triggers 3 applyOptions() calls, each
+        // of which forces a full chart re-render.  The chart's
+        // time scale is the most expensive part to re-render, so
+        // batching dramatically improves x-axis smoothness.
+        if (this._pendingRedraw) return;
+        this._pendingRedraw = requestAnimationFrame(() => {
+            this._pendingRedraw = null;
+            try { this.chart.timeScale().applyOptions({}); } catch (_) {}
+        });
     }
 }

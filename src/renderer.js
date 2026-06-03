@@ -1,24 +1,9 @@
 // Entry point for the renderer process.
-//
-// Responsibilities:
-//   1. Build the lightweight-charts chart and load sample data.
-//   2. Construct the helper modules (state, UI, chart lock,
-//      preview manager, trendline/rectangle/fibonacci manager,
-//      drawing tools, interaction controllers).
-//   3. Wire up top-level events: chart click, crosshair move,
-//      keyboard, and "any other sidebar button deactivates the
-//      active drawing tool".
-//
-// All three drawing tools (trendline, rectangle, fibonacci) honour
-// TradingView-style modifier keys:
-//   • SHIFT held  →  angle-lock the second anchor to the closest 45°
-//   • CTRL  held  →  magnet-snap the second anchor to the nearest
-//                    candlestick OHLC value
 
 import { CandlestickSeries, createChart, CrosshairMode } from 'lightweight-charts';
 import 'bootstrap-icons/font/bootstrap-icons.min.css';
 
-import { createState, TRENDLINE_COLOR, RECTANGLE_COLOR, FIBONACCI_COLOR } from './utils/state.js';
+import { createState, TRENDLINE_COLOR, RECTANGLE_COLOR, FIBONACCI_COLOR, LONG_POSITION_COLOR } from './utils/state.js';
 import { createUI } from './utils/ui.js';
 import { createChartLock } from './utils/chartLock.js';
 import { createPreviewManager } from './utils/previewManager.js';
@@ -33,19 +18,21 @@ import { createFibonacciManager } from './utils/fibonacciManager.js';
 import { createFibonacciPreview } from './utils/fibonacciPreview.js';
 import { createFibonacciTool } from './utils/fibonacciTool.js';
 import { createFibonacciInteraction } from './utils/fibonacciInteraction.js';
+import { createLongPositionManager } from './utils/longPositionManager.js';
+import { createLongPositionTool } from './utils/longPositionTool.js';
+import { createLongPositionInteraction } from './utils/longPositionInteraction.js';
 import { extendWithDummies } from './utils/dataExtension.js';
 
 const DUMMY_COUNT = 300;
 
-// ---------- DOM elements ----------
 const container = document.getElementById('chart-container');
 const chartArea = document.getElementById('chart-area');
 const toolStatus = document.getElementById('tool-status');
 const trendlineToolBtn = document.getElementById('trendline-tool');
 const rectangleToolBtn = document.getElementById('rectangle-tool');
 const fibonacciToolBtn = document.getElementById('fibonacci-tool');
+const longPositionToolBtn = document.getElementById('long-position-tool');
 
-// ---------- 1. Chart + series ----------
 const chart = createChart(container, {
     layout: { background: { color: '#1a1a1a' }, textColor: '#e1e1e1' },
     grid: { vertLines: { color: '#2b2b2b' }, horzLines: { color: '#2b2b2b' } },
@@ -67,7 +54,6 @@ const candlestickSeries = chart.addSeries(CandlestickSeries, {
 function setChartCrosshairMode(mode) {
     try {
         chart.applyOptions({ crosshair: { mode } });
-        console.log('[renderer] chart.crosshair.mode →', mode);
     } catch (e) {
         console.warn('[renderer] failed to set crosshair mode:', e);
     }
@@ -114,13 +100,11 @@ async function loadChartData() {
     }
 }
 
-// ---------- 2. Helper modules ----------
 const state = createState();
-
 const ui = createUI(chartArea, toolStatus, chart);
 const chartLock = createChartLock(chart);
 
-// ---------- 3. Trendline tool ----------
+// ---------- Trendline tool ----------
 const trendlines = createTrendlineManager(
     chart, candlestickSeries, state, TRENDLINE_COLOR, ui.requestRedraw
 );
@@ -128,30 +112,19 @@ const trendlinePreview = createPreviewManager(
     chart, candlestickSeries, state, TRENDLINE_COLOR, ui.requestRedraw
 );
 const drawingTool = createTrendlineTool({
-    state,
-    toolBtn: trendlineToolBtn,
-    chart,
-    series: candlestickSeries,
-    ui,
-    chartLock,
-    preview: trendlinePreview,
-    trendlines,
+    state, toolBtn: trendlineToolBtn, chart, series: candlestickSeries,
+    ui, chartLock, preview: trendlinePreview, trendlines,
 });
 
 createTrendlineInteraction({
-    container,
-    state,
-    ui,
-    chartLock,
-    trendlines,
-    chart,
-    series: candlestickSeries,
+    container, state, ui, chartLock, trendlines,
+    chart, series: candlestickSeries,
     getSnapTargets: () => drawingTool.getSnapTargets(),
     getShiftDown:  () => drawingTool.getShiftDown(),
     getCtrlDown:   () => drawingTool.getCtrlDown(),
 });
 
-// ---------- 4. Rectangle tool ----------
+// ---------- Rectangle tool ----------
 const rectanglesMgr = createRectangleManager(
     chart, candlestickSeries, state, RECTANGLE_COLOR, ui.requestRedraw
 );
@@ -159,30 +132,19 @@ const rectanglePreview = createRectanglePreview(
     chart, candlestickSeries, state, RECTANGLE_COLOR
 );
 const rectangleDrawingTool = createRectangleTool({
-    state,
-    toolBtn: rectangleToolBtn,
-    chart,
-    series: candlestickSeries,
-    ui,
-    chartLock,
-    preview: rectanglePreview,
-    rectangles: rectanglesMgr,
+    state, toolBtn: rectangleToolBtn, chart, series: candlestickSeries,
+    ui, chartLock, preview: rectanglePreview, rectangles: rectanglesMgr,
 });
 
 createRectangleInteraction({
-    container,
-    state,
-    ui,
-    chartLock,
-    rectangles: rectanglesMgr,
-    chart,
-    series: candlestickSeries,
+    container, state, ui, chartLock, rectangles: rectanglesMgr,
+    chart, series: candlestickSeries,
     getSnapTargets: () => rectangleDrawingTool.getSnapTargets(),
     getShiftDown:  () => rectangleDrawingTool.getShiftDown(),
     getCtrlDown:   () => rectangleDrawingTool.getCtrlDown(),
 });
 
-// ---------- 5. Fibonacci tool ----------
+// ---------- Fibonacci tool ----------
 const fibsMgr = createFibonacciManager(
     chart, candlestickSeries, state, FIBONACCI_COLOR, ui.requestRedraw
 );
@@ -190,41 +152,37 @@ const fibonacciPreview = createFibonacciPreview(
     chart, candlestickSeries, state, FIBONACCI_COLOR
 );
 const fibonacciDrawingTool = createFibonacciTool({
-    state,
-    toolBtn: fibonacciToolBtn,
-    chart,
-    series: candlestickSeries,
-    ui,
-    chartLock,
-    preview: fibonacciPreview,
-    fibs: fibsMgr,
+    state, toolBtn: fibonacciToolBtn, chart, series: candlestickSeries,
+    ui, chartLock, preview: fibonacciPreview, fibs: fibsMgr,
 });
 
 createFibonacciInteraction({
-    container,
-    state,
-    ui,
-    chartLock,
-    fibs: fibsMgr,
-    chart,
-    series: candlestickSeries,
+    container, state, ui, chartLock, fibs: fibsMgr,
+    chart, series: candlestickSeries,
     getSnapTargets: () => fibonacciDrawingTool.getSnapTargets(),
     getShiftDown:  () => fibonacciDrawingTool.getShiftDown(),
     getCtrlDown:   () => fibonacciDrawingTool.getCtrlDown(),
 });
 
-// ---------- 6. Cross-tool deactivation ----------
-//
-// We have THREE drawing tools (trendline, rectangle, fibonacci).
-// Activating any one should deactivate the other two.  All checks
-// use isActive() so an unconditional deactivate() doesn't wipe
-// out the global state of the just-activated tool.
-//
-// IMPORTANT: when adding a "deactivate X" listener to a sidebar
-// button, we MUST skip X's own button — otherwise clicking that
-// button activates X via its toggle listener, then immediately
-// deactivates it via this loop's listener.
-const DRAWING_TOOL_IDS = ['trendline-tool', 'rectangle-tool', 'fibonacci-tool'];
+// ---------- Long Position tool ----------
+const longPositionsMgr = createLongPositionManager(
+    chart, candlestickSeries, state, LONG_POSITION_COLOR, ui.requestRedraw
+);
+const longPositionDrawingTool = createLongPositionTool({
+    state, toolBtn: longPositionToolBtn, chart, series: candlestickSeries,
+    ui, chartLock, longPositions: longPositionsMgr,
+});
+
+createLongPositionInteraction({
+    container, state, ui, chartLock, longPositions: longPositionsMgr,
+    chart, series: candlestickSeries,
+    getSnapTargets: () => longPositionDrawingTool.getSnapTargets(),
+    getShiftDown:  () => longPositionDrawingTool.getShiftDown(),
+    getCtrlDown:   () => longPositionDrawingTool.getCtrlDown(),
+});
+
+// ---------- Cross-tool deactivation ----------
+const DRAWING_TOOL_IDS = ['trendline-tool', 'rectangle-tool', 'fibonacci-tool', 'long-position-tool'];
 
 function deactivateOtherTools(activeToolBtn) {
     return () => {
@@ -237,27 +195,33 @@ function deactivateOtherTools(activeToolBtn) {
         if (activeToolBtn !== trendlineToolBtn && drawingTool.isActive()) {
             drawingTool.deactivate();
         }
+        if (activeToolBtn !== longPositionToolBtn && longPositionDrawingTool.isActive()) {
+            longPositionDrawingTool.deactivate();
+        }
     };
 }
 
 trendlineToolBtn.addEventListener('click', deactivateOtherTools(trendlineToolBtn));
 rectangleToolBtn.addEventListener('click', deactivateOtherTools(rectangleToolBtn));
 fibonacciToolBtn.addEventListener('click', deactivateOtherTools(fibonacciToolBtn));
+longPositionToolBtn.addEventListener('click', deactivateOtherTools(longPositionToolBtn));
 
-// Any other (non-drawing) sidebar button → deactivate ALL drawing
-// tools.  All checks use isActive() to avoid wiping just-set state.
 document.querySelectorAll('.sidebar-btn').forEach(btn => {
     if (DRAWING_TOOL_IDS.includes(btn.id)) return;
     btn.addEventListener('click', () => {
         if (drawingTool.isActive()) drawingTool.deactivate();
         if (rectangleDrawingTool.isActive()) rectangleDrawingTool.deactivate();
         if (fibonacciDrawingTool.isActive()) fibonacciDrawingTool.deactivate();
+        if (longPositionDrawingTool.isActive()) longPositionDrawingTool.deactivate();
     });
 });
 
-// ---------- 7. Wire up top-level events ----------
-// Chart click is consumed by whichever tool is active.
+// ---------- Top-level events ----------
 chart.subscribeClick((param) => {
+    if (longPositionDrawingTool.isActive()) {
+        longPositionDrawingTool.handleChartClick(param);
+        return;
+    }
     if (fibonacciDrawingTool.isActive()) {
         fibonacciDrawingTool.handleChartClick(param);
         return;
@@ -269,8 +233,11 @@ chart.subscribeClick((param) => {
     drawingTool.handleChartClick(param);
 });
 
-// Crosshair move is routed to the active tool.
 chart.subscribeCrosshairMove((param) => {
+    if (longPositionDrawingTool.isActive()) {
+        longPositionDrawingTool.handleCrosshairMove(param);
+        return;
+    }
     if (fibonacciDrawingTool.isActive()) {
         fibonacciDrawingTool.handleCrosshairMove(param);
         return;
@@ -282,10 +249,12 @@ chart.subscribeCrosshairMove((param) => {
     drawingTool.handleCrosshairMove(param);
 });
 
-// Keyboard shortcuts.
 window.addEventListener('keydown', (evt) => {
     if (evt.key === 'Escape') {
-        if (fibonacciDrawingTool.isActive()) {
+        if (longPositionDrawingTool.isActive()) {
+            longPositionDrawingTool.cancelInProgress();
+            longPositionDrawingTool.deactivate();
+        } else if (fibonacciDrawingTool.isActive()) {
             fibonacciDrawingTool.cancelInProgress();
             fibonacciDrawingTool.deactivate();
         } else if (rectangleDrawingTool.isActive()) {
@@ -294,6 +263,8 @@ window.addEventListener('keydown', (evt) => {
         } else if (drawingTool.isActive()) {
             drawingTool.cancelInProgress();
             drawingTool.deactivate();
+        } else if (state.selectedLongPosition) {
+            longPositionsMgr.clearSelection();
         } else if (state.selectedFib) {
             fibsMgr.clearSelection();
         } else if (state.selectedRectangle) {
@@ -302,8 +273,10 @@ window.addEventListener('keydown', (evt) => {
             trendlines.clearSelection();
         }
     } else if ((evt.key === 'Delete' || evt.key === 'Backspace')
-               && (state.selectedFib || state.selectedRectangle || state.selectedTrendLine)) {
-        if (state.selectedFib) {
+               && (state.selectedLongPosition || state.selectedFib || state.selectedRectangle || state.selectedTrendLine)) {
+        if (state.selectedLongPosition) {
+            longPositionsMgr.remove(state.selectedLongPosition);
+        } else if (state.selectedFib) {
             fibsMgr.remove(state.selectedFib);
         } else if (state.selectedRectangle) {
             rectanglesMgr.remove(state.selectedRectangle);
@@ -314,12 +287,10 @@ window.addEventListener('keydown', (evt) => {
     }
 });
 
-// ---------- 8. Resize observer ----------
 new ResizeObserver(entries => {
     if (entries.length === 0) return;
     const { width, height } = entries[0].contentRect;
     chart.resize(width, height);
 }).observe(container);
 
-// eslint-disable-next-line no-console
-console.log('[renderer] ready — click the Trend line, Rectangle, or Fibonacci button in the sidebar to start drawing');
+console.log('[renderer] ready — click the Trend line, Rectangle, Fibonacci, or Long Position button in the sidebar to start drawing');

@@ -163,7 +163,7 @@ export function createRectangleInteraction({
         state.rectangles.forEach(r => r.setHovering(false));
         if (hit) hit.rectangle.setHovering(true);
 
-        if (state.drag) {
+        if (state.drag && state.drag.rectangle) {
             const d = state.drag;
             const shift = !!evt.shiftKey || (typeof getShiftDown === 'function' && getShiftDown());
             const ctrl  = !!evt.ctrlKey  || (typeof getCtrlDown  === 'function' && getCtrlDown());

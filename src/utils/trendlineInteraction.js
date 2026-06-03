@@ -96,7 +96,7 @@ export function createTrendlineInteraction({
         state.trendLines.forEach(tl => tl.setHovering(false));
         if (hit) hit.trendLine.setHovering(true);
 
-        if (state.drag) {
+        if (state.drag && state.drag.trendLine) {
             const d = state.drag;
             const shift = !!evt.shiftKey || (typeof getShiftDown === "function" && getShiftDown());
             const ctrl  = !!evt.ctrlKey  || (typeof getCtrlDown  === "function" && getCtrlDown());

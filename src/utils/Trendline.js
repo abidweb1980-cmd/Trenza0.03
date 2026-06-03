@@ -149,9 +149,17 @@ export class NativeTrendLine {
     /**
      * Translate the whole line by a pixel delta.
      */
-    translateByPixel(dxPx, dyPx) {
-        const x1 = this.chart.timeScale().timeToCoordinate(this.p1.time);
-        const y1 = this.series.priceToCoordinate(this.p1.price);
+    translateByPixel(dxPx, dyPx, cachedX1 = null, cachedY1 = null) {
+        // We accept cached pixel positions for p1 (already computed
+        // by the interaction handler) to avoid redundant
+        // timeToCoordinate / priceToCoordinate round-trips.  This
+        // is the main fix for the x-axis drag lag.
+        const x1 = cachedX1 != null
+            ? cachedX1
+            : this.chart.timeScale().timeToCoordinate(this.p1.time);
+        const y1 = cachedY1 != null
+            ? cachedY1
+            : this.series.priceToCoordinate(this.p1.price);
         const x2 = this.chart.timeScale().timeToCoordinate(this.p2.time);
         const y2 = this.series.priceToCoordinate(this.p2.price);
         if ([x1, y1, x2, y2].some(v => v === null)) return;
@@ -303,13 +311,17 @@ export class NativeTrendLine {
     }
 
     _requestUpdate() {
-        // In lightweight-charts v5, the most reliable way to force a
-        // primitive to re-render is to nudge the series.  We call
-        // applyOptions({}) on the chart, time scale, AND series to
-        // be sure the primitive's paneView.renderer() is invoked
-        // again with the latest p1 / p2 values.
-        try { this.chart.applyOptions({}); } catch (_) {}
-        try { this.chart.timeScale().applyOptions({}); } catch (_) {}
-        try { this.series.applyOptions({}); } catch (_) {}
+        // Throttled redraw: batch multiple data changes within a
+        // single animation frame into ONE chart redraw.  This is
+        // the main fix for x-axis drag lag — without this, every
+        // mousemove event triggers 3 applyOptions() calls, each
+        // of which forces a full chart re-render.  The chart's
+        // time scale is the most expensive part to re-render, so
+        // batching dramatically improves x-axis smoothness.
+        if (this._pendingRedraw) return;
+        this._pendingRedraw = requestAnimationFrame(() => {
+            this._pendingRedraw = null;
+            try { this.chart.timeScale().applyOptions({}); } catch (_) {}
+        });
     }
 }

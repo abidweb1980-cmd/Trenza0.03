@@ -99,7 +99,7 @@ export function createFibonacciInteraction({
         state.fibs.forEach(f => f.setHovering(false));
         if (hit) hit.fib.setHovering(true);
 
-        if (state.drag) {
+        if (state.drag && state.drag.fib) {
             const d = state.drag;
             const shift = !!evt.shiftKey || (typeof getShiftDown === 'function' && getShiftDown());
             const ctrl  = !!evt.ctrlKey  || (typeof getCtrlDown  === 'function' && getCtrlDown());
