@@ -98,34 +98,39 @@ export function createLongPositionTool({
         const entryPrice = r.price;
         const entryAnchor = { time: r.time, price: entryPrice };
         
-        // Calculate TP/SL based on visible candles' high/low range
+        // Calculate TP/SL based on VISIBLE candles' high/low range
         let tp = entryPrice + 0.50;
         let sl = entryPrice - 0.50;
         
         try {
-            // Iterate through all candles to find overall high/low
-            // (lightweight-charts dataByIndex(0) returns the first candle in the series)
-            let highestHigh = -Infinity;
-            let lowestLow = Infinity;
-            let barCount = 0;
-            
-            for (let i = 0; i < 10000 && barCount < 500; i++) {
-                const bar = series.dataByIndex(i);
-                if (!bar) break;
-                if (bar.high != null && bar.low != null) {
-                    highestHigh = Math.max(highestHigh, bar.high);
-                    lowestLow = Math.min(lowestLow, bar.low);
+            // Use getVisibleLogicalRange to find visible bar indices
+            const visibleRange = chart.timeScale().getVisibleLogicalRange();
+            if (visibleRange) {
+                let highestHigh = -Infinity;
+                let lowestLow = Infinity;
+                
+                // Get candles within the visible logical range
+                const fromIdx = Math.max(0, Math.floor(visibleRange.from));
+                const toIdx = Math.ceil(visibleRange.to);
+                const maxBars = Math.max(10, toIdx - fromIdx); // At least 10 bars
+                
+                for (let i = 0; i < maxBars; i++) {
+                    const bar = series.dataByIndex(fromIdx + i);
+                    if (!bar) break;
+                    
+                    if (bar.high != null && bar.low != null) {
+                        highestHigh = Math.max(highestHigh, bar.high);
+                        lowestLow = Math.min(lowestLow, bar.low);
+                    }
                 }
-                barCount++;
-            }
-            
-            if (highestHigh > lowestLow && isFinite(highestHigh) && isFinite(lowestLow)) {
-                const candleRange = highestHigh - lowestLow;
-                // Set TP/SL height to ~1/2 of the candle range
-                // This gives a visually balanced trade zone
-                const halfRange = candleRange * 0.5;
-                tp = entryPrice + halfRange;
-                sl = entryPrice - halfRange;
+                
+                if (highestHigh > lowestLow && isFinite(highestHigh) && isFinite(lowestLow)) {
+                    const candleRange = highestHigh - lowestLow;
+                    // Set TP/SL height to ~1/2 of the visible candle range
+                    const halfRange = candleRange * 0.5;
+                    tp = entryPrice + halfRange;
+                    sl = entryPrice - halfRange;
+                }
             }
         } catch (_) {
             // Keep defaults on error
@@ -136,7 +141,6 @@ export function createLongPositionTool({
         console.log('[longposition] placed at', entryAnchor, '| tp:', tp.toFixed(2), 'sl:', sl.toFixed(2), '| mode:', r.mode);
 
         // Auto-exit drawing mode so the user can interact normally
-        // with the freshly placed position.
         deactivate();
         return true;
     }

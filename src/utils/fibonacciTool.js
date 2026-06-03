@@ -56,6 +56,7 @@ export function createFibonacciTool({
             lastRangeKey = key;
             candleTargets = buildCandlePixelTargets(chart, series);
             console.log('[fibonacci] rebuilt snap targets:', candleTargets.length, 'candles');
+            // console.log(chart.timeScale());
         }
     }
     chart.timeScale().subscribeVisibleLogicalRangeChange(refreshTargetsIfNeeded);

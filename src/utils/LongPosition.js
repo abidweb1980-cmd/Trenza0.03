@@ -433,6 +433,7 @@ export class NativeLongPosition {
     }
 
     _drawStats(ctx, left, right, top, bottom, yEntry) {
+        return
         if (this.settings.compactStats) {
             const text = `Long ● 1:${this._riskReward().toFixed(2)} · Risk ${this._formatMoney(this._riskAmount())} · +${this._formatMoney(this._potentialProfit())}`;
             ctx.font = '11px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
