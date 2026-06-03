@@ -108,26 +108,54 @@ export function createFibonacciInteraction({
             const shift = !!evt.shiftKey || (typeof getShiftDown === 'function' && getShiftDown());
             const ctrl  = !!evt.ctrlKey  || (typeof getCtrlDown  === 'function' && getCtrlDown());
 
+            // Calculate movement delta since mousedown
+            const dx = x - d.startX;
+            const dy = y - d.startY;
+            
+            // Threshold for determining dominant movement direction
+            const DRAG_DIRECTION_THRESHOLD = 2.0;
+
             if (d.target === 'p1' || d.target === 'p2') {
-                refreshTargetsIfNeeded();
-                const otherAnchor = d.target === 'p1' ? d.fib.p2 : d.fib.p1;
-                const r = resolvePoint({
-                    chart, series,
-                    rawPx: { x, y },
-                    targets: myTargets,
-                    shift, ctrl,
-                    context: { mode: 'drag-endpoint', otherAnchor, isFirst: false },
-                });
-                if (r.mode !== 'free') {
-                    console.log('[fibonacciInteraction] DRAG',
-                        shift ? 'SHIFT' : 'CTRL', '→', r.mode, r.info || '',
-                        '| raw(', x|0, ',', y|0, ')',
-                        '→ snapped(', r.x|0, ',', r.y|0, ')');
+                // Check if this should be reinterpreted as a translation
+                // based on dominant movement direction
+                let shouldTranslate = false;
+                
+                // For fibonacci points, if movement is strongly horizontal,
+                // treat as horizontal translation (preserving vertical relationship)
+                // This handles the case where user tries to move tool horizontally
+                // but clicks slightly off-center on a point
+                if (Math.abs(dx) > Math.abs(dy) * DRAG_DIRECTION_THRESHOLD) {
+                    shouldTranslate = true;
                 }
-                d.fib.movePointToPixel(d.target, r.x, r.y);
+                
+if (shouldTranslate) {
+                    // Treat as translation instead of resize
+                    d.lastX = x;
+                    d.lastY = y;
+                    // Horizontal translation: preserve vertical position
+                    d.fib.translateHorizontallyByPixel(dx);
+                } else {
+                    // Normal point drag via endpoint.  We honour SHIFT
+                    // (45° angle-lock) and CTRL (OHLC magnet) for the
+                    // dragged point position.
+                    refreshTargetsIfNeeded();
+                    const otherAnchor = d.target === 'p1' ? d.fib.p2 : d.fib.p1;
+                    const r = resolvePoint({
+                        chart, series,
+                        rawPx: { x, y },
+                        targets: myTargets,
+                        shift, ctrl,
+                        context: { mode: 'drag-endpoint', otherAnchor, isFirst: false },
+                    });
+                    if (r.mode !== 'free') {
+                        console.log('[fibonacciInteraction] DRAG',
+                            shift ? 'SHIFT' : 'CTRL', '→', r.mode, r.info || '',
+                            '| raw(', x|0, ',', y|0, ')',
+                            '→ snapped(', r.x|0, ',', r.y|0, ')');
+                    }
+                    d.fib.movePointToPixel(d.target, r.x, r.y);
+                }
             } else if (d.target === 'body') {
-                const dx = x - d.startX;
-                const dy = y - d.startY;
                 d.lastX = x;
                 d.lastY = y;
                 d.fib.translateByPixelFromAnchor(

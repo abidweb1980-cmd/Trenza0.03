@@ -174,31 +174,74 @@ export function createRectangleInteraction({
             const shift = !!evt.shiftKey || (typeof getShiftDown === 'function' && getShiftDown());
             const ctrl  = !!evt.ctrlKey  || (typeof getCtrlDown  === 'function' && getCtrlDown());
 
+            // Calculate movement delta since mousedown
+            const dx = x - d.startX;
+            const dy = y - d.startY;
+            
+            // Threshold for determining dominant movement direction
+            const DRAG_DIRECTION_THRESHOLD = 2.0;
+
             if (HANDLE_TYPES.has(d.target)) {
-                // Resize via one of the 8 handles.  We honour SHIFT
-                // (45° angle-lock) and CTRL (OHLC magnet) for the
-                // dragged handle position.
-                refreshTargetsIfNeeded();
-                const otherAnchor = oppositeAnchor(d.rectangle, d.target);
-                const r = resolvePoint({
-                    chart, series,
-                    rawPx: { x, y },
-                    targets: myTargets,
-                    shift, ctrl,
-                    context: { mode: 'drag-endpoint', otherAnchor, isFirst: false },
-                });
-                if (r.mode !== 'free') {
-                    console.log('[rectangleInteraction] DRAG',
-                        shift ? 'SHIFT' : 'CTRL', '→', r.mode, r.info || '',
-                        '| raw(', x|0, ',', y|0, ')',
-                        '→ snapped(', r.x|0, ',', r.y|0, ')');
+                // Check if this should be reinterpreted as a translation
+                // based on dominant movement direction
+                let shouldTranslate = false;
+                let translateType = null; // 'horizontal' or 'vertical'
+                
+                // For horizontal handles (tm, bm), if horizontal movement dominates, treat as horizontal translation
+                if (d.target === 'tm' || d.target === 'bm') {
+                    if (Math.abs(dx) > Math.abs(dy) * DRAG_DIRECTION_THRESHOLD) {
+                        shouldTranslate = true;
+                        translateType = 'horizontal';
+                    }
+                } 
+                // For vertical handles (lm, rm), if vertical movement dominates, treat as vertical translation
+                else if (d.target === 'lm' || d.target === 'rm') {
+                    if (Math.abs(dy) > Math.abs(dx) * DRAG_DIRECTION_THRESHOLD) {
+                        shouldTranslate = true;
+                        translateType = 'vertical';
+                    }
                 }
-                d.rectangle.movePointToPixel(d.target, r.x, r.y);
+                
+                if (shouldTranslate) {
+                    // Treat as translation instead of resize
+                    d.lastX = x;
+                    d.lastY = y;
+                    if (translateType === 'horizontal') {
+                        // Horizontal translation: move left/right, keep height
+                        d.rectangle.translateHorizontallyByPixel(dx);
+                    } else if (translateType === 'vertical') {
+                        // Vertical translation: move up/down, keep width
+                        d.rectangle.translateVerticallyByPixel(dy);
+                    } else {
+                        // Full translation (both directions)
+                        d.rectangle.translateByPixelFromAnchor(
+                            d.anchorX + dx, d.anchorY + dy
+                        );
+                    }
+                } else {
+                    // Normal resize via one of the 8 handles.  We honour SHIFT
+                    // (45° angle-lock) and CTRL (OHLC magnet) for the
+                    // dragged handle position.
+                    refreshTargetsIfNeeded();
+                    const otherAnchor = oppositeAnchor(d.rectangle, d.target);
+                    const r = resolvePoint({
+                        chart, series,
+                        rawPx: { x, y },
+                        targets: myTargets,
+                        shift, ctrl,
+                        context: { mode: 'drag-endpoint', otherAnchor, isFirst: false },
+                    });
+                    if (r.mode !== 'free') {
+                        console.log('[rectangleInteraction] DRAG',
+                            shift ? 'SHIFT' : 'CTRL', '→', r.mode, r.info || '',
+                            '| raw(', x|0, ',', y|0, ')',
+                            '→ snapped(', r.x|0, ',', r.y|0, ')');
+                    }
+                    d.rectangle.movePointToPixel(d.target, r.x, r.y);
+                }
             } else if (d.target === 'border' || d.target === 'body') {
                 // Anchor-at-mousedown translate for full precision
                 // on slow movements.
-                const dx = x - d.startX;
-                const dy = y - d.startY;
                 d.lastX = x;
                 d.lastY = y;
                 d.rectangle.translateByPixelFromAnchor(

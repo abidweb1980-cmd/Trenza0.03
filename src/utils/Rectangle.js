@@ -208,24 +208,37 @@ export class NativeRectangle {
     /**
      * Translate the whole rectangle by a pixel delta.
      */
-    /**
-     * Anchor-at-mousedown translate: set p1 to (newAnchorX, newAnchorY)
-     * and shift p2 by the same x delta.
-     */
+/**
+      * Anchor-at-mousedown translate: set p1 to (newAnchorX, newAnchorY)
+      * and shift p2 by the same x delta, preserving both horizontal
+      * and vertical positions relative to each other.
+      */
     translateByPixelFromAnchor(newAnchorX, newAnchorY) {
         const newTime  = this.chart.timeScale().coordinateToTime(newAnchorX);
         const newPrice = this.series.coordinateToPrice(newAnchorY);
         if (newTime === null || newPrice === null) return;
+        
         const oldX  = this.chart.timeScale().timeToCoordinate(this.p1.time);
+        const oldY  = this.series.priceToCoordinate(this.p1.price);
         const oldX2 = this.chart.timeScale().timeToCoordinate(this.p2.time);
+        const oldY2 = this.series.priceToCoordinate(this.p2.price);
+        
+        if (oldX === null || oldY === null || oldX2 === null || oldY2 === null) return;
+        
+        // Calculate deltas
+        const dxPx = newAnchorX - oldX;
+        const dyPx = newAnchorY - oldY;
+        
+        // Apply the same deltas to both points (proper translation)
+        const newX2 = oldX2 + dxPx;
+        const newY2 = oldY2 + dyPx;
+        
+        const newTime2 = this.chart.timeScale().coordinateToTime(newX2);
+        const newPrice2 = this.series.coordinateToPrice(newY2);
+        
         this.p1 = { time: newTime, price: newPrice };
-        if (oldX !== null && oldX2 !== null) {
-            const dxPx = newAnchorX - oldX;
-            const newX2 = oldX2 + dxPx;
-            const newTime2 = this.chart.timeScale().coordinateToTime(newX2);
-            if (newTime2 !== null) {
-                this.p2 = { time: newTime2, price: this.p2.price };
-            }
+        if (newTime2 !== null && newPrice2 !== null) {
+            this.p2 = { time: newTime2, price: newPrice2 };
         }
         this._requestUpdate();
         if (this._onChange) this._onChange(this);
@@ -245,6 +258,44 @@ export class NativeRectangle {
 
         this.p1 = { time: t1, price: p1Price };
         this.p2 = { time: t2, price: p2Price };
+        this._requestUpdate();
+        if (this._onChange) this._onChange(this);
+    }
+
+    /**
+     * Translate horizontally only (time axis) by pixel delta.
+     * Preserves the rectangle's vertical position/height.
+     */
+    translateHorizontallyByPixel(dxPx) {
+        const x1 = this.chart.timeScale().timeToCoordinate(this.p1.time);
+        const x2 = this.chart.timeScale().timeToCoordinate(this.p2.time);
+        if ([x1, x2].some(v => v === null)) return;
+
+        const t1 = this.chart.timeScale().coordinateToTime(x1 + dxPx);
+        const t2 = this.chart.timeScale().coordinateToTime(x2 + dxPx);
+        if (!t1 || !t2) return;
+
+        this.p1 = { time: t1, price: this.p1.price };
+        this.p2 = { time: t2, price: this.p2.price };
+        this._requestUpdate();
+        if (this._onChange) this._onChange(this);
+    }
+
+    /**
+     * Translate vertically only (price axis) by pixel delta.
+     * Preserves the rectangle's horizontal position/width.
+     */
+    translateVerticallyByPixel(dyPx) {
+        const y1 = this.series.priceToCoordinate(this.p1.price);
+        const y2 = this.series.priceToCoordinate(this.p2.price);
+        if ([y1, y2].some(v => v === null)) return;
+
+        const p1Price = this.series.coordinateToPrice(y1 + dyPx);
+        const p2Price = this.series.coordinateToPrice(y2 + dyPx);
+        if (p1Price === null || p2Price === null) return;
+
+        this.p1 = { time: this.p1.time, price: p1Price };
+        this.p2 = { time: this.p2.time, price: p2Price };
         this._requestUpdate();
         if (this._onChange) this._onChange(this);
     }
