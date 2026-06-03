@@ -77,11 +77,19 @@ export function createTrendlineInteraction({
 
         trendlines.select(hit.trendLine);
 
+        // Capture original mouse AND original p1 pixel
+        // position so we can do the anchor-at-mousedown
+        // translate during body drag (full precision for slow
+        // movements).
+        const anchorX = chart.timeScale().timeToCoordinate(hit.trendLine.p1.time);
+        const anchorY = series.priceToCoordinate(hit.trendLine.p1.price);
         state.drag = {
             trendLine: hit.trendLine,
             target: hit.target,
             startX: x,
             startY: y,
+            anchorX,
+            anchorY,
             lastX: x,
             lastY: y,
         };

@@ -80,11 +80,15 @@ export function createFibonacciInteraction({
 
         fibs.select(hit.fib);
 
+        const anchorX = chart.timeScale().timeToCoordinate(hit.fib.p1.time);
+        const anchorY = series.priceToCoordinate(hit.fib.p1.price);
         state.drag = {
             fib: hit.fib,
             target: hit.target,
             startX: x,
             startY: y,
+            anchorX,
+            anchorY,
             lastX: x,
             lastY: y,
         };
@@ -122,11 +126,13 @@ export function createFibonacciInteraction({
                 }
                 d.fib.movePointToPixel(d.target, r.x, r.y);
             } else if (d.target === 'body') {
-                const dx = x - d.lastX;
-                const dy = y - d.lastY;
+                const dx = x - d.startX;
+                const dy = y - d.startY;
                 d.lastX = x;
                 d.lastY = y;
-                d.fib.translateByPixel(dx, dy);
+                d.fib.translateByPixelFromAnchor(
+                    d.anchorX + dx, d.anchorY + dy
+                );
             }
             ui.setChartCursor('cursor-grabbing');
             return;

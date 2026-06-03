@@ -222,6 +222,53 @@ export class NativeLongPosition {
         if (this._onChange) this._onChange(this);
     }
 
+    /**
+     * Translate the trade so that the entry anchor lands at
+     * (newAnchorX, newAnchorY) in pixel space.  This is the
+     * "anchor at mousedown" approach: each move event calls this
+     * with a freshly-computed target pixel position, so slow
+     * movements get full precision (no accumulated rounding from
+     * candle-snap).  The math: new entry.time / entry.price is
+     * derived from coordinateToTime / coordinateToPrice of the
+     * target pixel.
+     */
+    translateByPixelFromAnchor(newAnchorX, newAnchorY) {
+        const newTime  = this.chart.timeScale().coordinateToTime(newAnchorX);
+        const newPrice = this.series.coordinateToPrice(newAnchorY);
+        if (newTime === null || newPrice === null) return;
+
+        // Compute the price delta and shift tp/sl by it
+        const oldY = this.series.priceToCoordinate(this.entry.price);
+        const yDelta = newAnchorY - oldY;
+        const dPrice = (yDelta !== 0)
+            ? this.series.coordinateToPrice(oldY + yDelta) - this.entry.price
+            : 0;
+
+        // Capture the original x delta so we can preserve the
+        // trade's time-window width.
+        const oldX = this.chart.timeScale().timeToCoordinate(this.entry.time);
+        const oldRightX = this.endTime != null
+            ? this.chart.timeScale().timeToCoordinate(this.endTime)
+            : null;
+
+        this.entry.time  = newTime;
+        this.entry.price = newPrice;
+        if (dPrice !== 0) {
+            this.tp += dPrice;
+            this.sl += dPrice;
+        }
+
+        // Shift endTime by the same x pixel delta so the trade
+        // window width is preserved.
+        if (this.endTime != null && oldRightX != null && oldX != null) {
+            const dxPx = newAnchorX - oldX;
+            const newEndX = oldRightX + dxPx;
+            const newEndTime = this.chart.timeScale().coordinateToTime(newEndX);
+            if (newEndTime !== null) this.endTime = newEndTime;
+        }
+        this._afterChange();
+    }
+
     translateByPixel(dxPx, dyPx) {
         // Body drag: move the entire trade in BOTH x (time) and
         // y (price).  Time translation shifts entry.time and

@@ -80,11 +80,24 @@ export function createLongPositionInteraction({
 
         longPositions.select(hit.longPosition);
 
+        // Capture the original mouse position AND the primitive's
+        // original anchor pixel position at drag start.  This is
+        // the key to the precision fix: instead of accumulating
+        // tiny pixel deltas (each of which goes through
+        // coordinateToTime's candle-snap rounding), we always
+        // translate from a single fixed anchor — so 1-pixel
+        // movements of the mouse always produce a fresh, full-
+        // precision translation.
+        const anchorX = chart.timeScale().timeToCoordinate(hit.longPosition.entry.time);
+        const anchorY = series.priceToCoordinate(hit.longPosition.entry.price);
+
         state.drag = {
             longPosition: hit.longPosition,
             target: hit.target,
-            startX: x,
+            startX: x,         // mouse position at drag start
             startY: y,
+            anchorX,          // primitive anchor pixel position at drag start
+            anchorY,
             lastX: x,
             lastY: y,
         };
@@ -105,29 +118,23 @@ export function createLongPositionInteraction({
             const ctrl  = !!evt.ctrlKey  || (typeof getCtrlDown  === 'function' && getCtrlDown());
 
             // Body drag → translate the entire trade in BOTH x
-            // (time) and y (price) directions.  We pre-compute the
-            // entry's pixel position ONCE per move event and pass
-            // it to translateByPixel so it doesn't have to do its
-            // own round-trip.  This is the main fix for the x-axis
-            // lag.
+            // (time) and y (price) directions.  We use the ANCHOR-
+            // AT-MOUSEDOWN approach: dx/dy is the offset from the
+            // original mouse-down position, and the new entry
+            // position is anchor + dx/dy.  This gives full precision
+            // for slow movements (each move event uses a single
+            // fresh coordinateToTime call, NOT accumulated tiny
+            // deltas that lose precision to candle-snap rounding).
             if (d.target === 'body') {
-                const dx = x - d.lastX;
-                const dy = y - d.lastY;
+                const dx = x - d.startX;     // offset from drag-start mouse
+                const dy = y - d.startY;
                 d.lastX = x;
                 d.lastY = y;
-                // Pre-compute entry's current pixel position so the
-                // primitive's translateByPixel doesn't have to do
-                // its own timeToCoordinate call (this round-trip is
-                // the main source of x-axis lag).
-                const cachedX = d.cachedX != null
-                    ? d.cachedX
-                    : chart.timeScale().timeToCoordinate(d.longPosition.entry.time);
-                const cachedY = d.cachedY != null
-                    ? d.cachedY
-                    : series.priceToCoordinate(d.longPosition.entry.price);
-                d.cachedX = cachedX + dx;
-                d.cachedY = cachedY + dy;
-                d.longPosition.translateByPixel(dx, dy, cachedX, cachedY);
+                // The primitive's translateByPixel does the actual
+                // math: new entry pixel = anchor + (dx, dy).
+                d.longPosition.translateByPixelFromAnchor(
+                    d.anchorX + dx, d.anchorY + dy
+                );
             }
             // TP / SL / entry line drag → vertical only (snap to price)
             else if (d.target === 'tp' || d.target === 'sl' || d.target === 'entry') {

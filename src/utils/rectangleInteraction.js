@@ -143,11 +143,17 @@ export function createRectangleInteraction({
 
         rectangles.select(hit.rectangle);
 
+        // Capture original mouse AND original p1 pixel
+        // position for the anchor-at-mousedown translate.
+        const anchorX = chart.timeScale().timeToCoordinate(hit.rectangle.p1.time);
+        const anchorY = series.priceToCoordinate(hit.rectangle.p1.price);
         state.drag = {
             rectangle: hit.rectangle,
             target: hit.target,
             startX: x,
             startY: y,
+            anchorX,
+            anchorY,
             lastX: x,
             lastY: y,
         };
@@ -189,12 +195,15 @@ export function createRectangleInteraction({
                 }
                 d.rectangle.movePointToPixel(d.target, r.x, r.y);
             } else if (d.target === 'border' || d.target === 'body') {
-                // Whole-rectangle translation.  Apply the pixel delta.
-                const dx = x - d.lastX;
-                const dy = y - d.lastY;
+                // Anchor-at-mousedown translate for full precision
+                // on slow movements.
+                const dx = x - d.startX;
+                const dy = y - d.startY;
                 d.lastX = x;
                 d.lastY = y;
-                d.rectangle.translateByPixel(dx, dy);
+                d.rectangle.translateByPixelFromAnchor(
+                    d.anchorX + dx, d.anchorY + dy
+                );
             }
             ui.setChartCursor('cursor-grabbing');
             return;
