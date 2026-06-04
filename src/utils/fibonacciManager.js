@@ -23,8 +23,7 @@ export function createFibonacciManager(chart, series, state, color, requestRedra
     function create(p1, p2) {
         const fib = new NativeFibonacciRetracement(
             chart, series, p1, p2, color,
-            () => { requestRedraw(); },            // onChange
-            (sel) => { select(sel); }              // onSelect
+            () => { requestRedraw(); }            // onChange
         );
         series.attachPrimitive(fib);
         state.fibs.push(fib);
@@ -33,25 +32,59 @@ export function createFibonacciManager(chart, series, state, color, requestRedra
     }
 
     /**
-     * Mark the given fib as the currently-selected one (deselecting
-     * the previous selection, if any).
+     * Select a fib (single select - clears other selections).
+     * Use addToSelection() for multi-select behavior.
      */
     function select(fib) {
-        if (state.selectedFib && state.selectedFib !== fib) {
+        if (state.selectedFib) {
             state.selectedFib.setSelected(false);
         }
         state.selectedFib = fib;
+        
+        // Also add to multi-selection array
+        if (fib && !state.selectedFibs.includes(fib)) {
+            state.selectedFibs.push(fib);
+        }
         if (fib) fib.setSelected(true);
+    }
+
+    /**
+     * Add to selection (for multi-select with SHIFT).
+     */
+    function addToSelection(fib) {
+        if (!fib || state.selectedFibs.includes(fib)) return;
+        
+        state.selectedFib = fib;
+        state.selectedFibs.push(fib);
+        fib.setSelected(true);
+    }
+
+    /**
+     * Deselect a specific fib
+     */
+    function deselect(fib) {
+        const idx = state.selectedFibs.indexOf(fib);
+        if (idx !== -1) {
+            state.selectedFibs.splice(idx, 1);
+            fib.setSelected(false);
+        }
+        if (state.selectedFib === fib) {
+            state.selectedFib = state.selectedFibs.length > 0 
+                ? state.selectedFibs[state.selectedFibs.length - 1] 
+                : null;
+            if (state.selectedFib) {
+                state.selectedFib.setSelected(true);
+            }
+        }
     }
 
     /**
      * Deselect whatever is currently selected.
      */
     function clearSelection() {
-        if (state.selectedFib) {
-            state.selectedFib.setSelected(false);
-            state.selectedFib = null;
-        }
+        state.selectedFibs.forEach(fib => fib.setSelected(false));
+        state.selectedFibs = [];
+        state.selectedFib = null;
     }
 
     /**
@@ -83,9 +116,11 @@ export function createFibonacciManager(chart, series, state, color, requestRedra
         }
         const idx = state.fibs.indexOf(fib);
         if (idx !== -1) state.fibs.splice(idx, 1);
+        const selIdx = state.selectedFibs.indexOf(fib);
+        if (selIdx !== -1) state.selectedFibs.splice(selIdx, 1);
         if (state.selectedFib === fib) state.selectedFib = null;
         requestRedraw();
     }
 
-    return { create, select, clearSelection, hitTest, remove };
+    return { create, select, addToSelection, deselect, clearSelection, hitTest, remove };
 }

@@ -263,25 +263,29 @@ window.addEventListener('keydown', (evt) => {
         } else if (drawingTool.isActive()) {
             drawingTool.cancelInProgress();
             drawingTool.deactivate();
-        } else if (state.selectedLongPosition) {
+        } else {
+            // Clear all selections on Escape
             longPositionsMgr.clearSelection();
-        } else if (state.selectedFib) {
             fibsMgr.clearSelection();
-        } else if (state.selectedRectangle) {
             rectanglesMgr.clearSelection();
-        } else if (state.selectedTrendLine) {
             trendlines.clearSelection();
         }
-    } else if ((evt.key === 'Delete' || evt.key === 'Backspace')
-               && (state.selectedLongPosition || state.selectedFib || state.selectedRectangle || state.selectedTrendLine)) {
-        if (state.selectedLongPosition) {
-            longPositionsMgr.remove(state.selectedLongPosition);
-        } else if (state.selectedFib) {
-            fibsMgr.remove(state.selectedFib);
-        } else if (state.selectedRectangle) {
-            rectanglesMgr.remove(state.selectedRectangle);
-        } else if (state.selectedTrendLine) {
-            trendlines.remove(state.selectedTrendLine);
+    } else if (evt.key === 'Delete' || evt.key === 'Backspace') {
+        // Remove all selected primitives (multi-select aware)
+        const hasSelection = state.selectedLongPositions.length > 0 || 
+                            state.selectedFibs.length > 0 || 
+                            state.selectedRectangles.length > 0 || 
+                            state.selectedTrendLines.length > 0;
+        
+        if (hasSelection) {
+            // Remove all selected long positions
+            [...state.selectedLongPositions].forEach(lp => longPositionsMgr.remove(lp));
+            // Remove all selected fibs
+            [...state.selectedFibs].forEach(fib => fibsMgr.remove(fib));
+            // Remove all selected rectangles
+            [...state.selectedRectangles].forEach(rect => rectanglesMgr.remove(rect));
+            // Remove all selected trendlines
+            [...state.selectedTrendLines].forEach(tl => trendlines.remove(tl));
         }
         ui.requestRedraw();
     }

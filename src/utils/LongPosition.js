@@ -150,6 +150,9 @@ export class NativeLongPosition {
         // rectangle in BOTH x and y directions, just like the
         // rectangle tool.  The entry line is purely a visual
         // divider — it has no separate drag target.
+        const yEntry = b.yEntry;
+        const entryHitRadius = 6;
+        if (Math.abs(py - yEntry) <= entryHitRadius && px >= left && px <= right) return 'entry';
         if (px >= left && px <= right && py >= top && py <= bottom) return 'body';
 
         return null;

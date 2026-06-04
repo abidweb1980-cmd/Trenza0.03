@@ -22,11 +22,12 @@ export function createState() {
         previewRectangle: null,
         previewFib: null,
 
-        // Currently selected primitives (or null)
-        selectedTrendLine: null,
-        selectedRectangle: null,
-        selectedFib: null,
-        selectedLongPosition: null,
+        // Currently selected primitives (supports multi-select)
+        // Use arrays for multi-selection
+        selectedTrendLines: [],
+        selectedRectangles: [],
+        selectedFibs: [],
+        selectedLongPositions: [],
 
         // All primitives on the chart
         trendLines: [],
@@ -34,7 +35,7 @@ export function createState() {
         fibs: [],
         longPositions: [],
 
-        // Active drag operation
+        // Active drag operation (can track multiple for multi-drag)
         drag: null,
 
         // Crosshair mode for visual feedback.

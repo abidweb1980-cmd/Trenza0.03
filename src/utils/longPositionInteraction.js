@@ -78,7 +78,18 @@ export function createLongPositionInteraction({
             return;
         }
 
-        longPositions.select(hit.longPosition);
+        // Check for SHIFT/CTRL modifier (used for multi-select)
+        const shiftPressed = !!evt.shiftKey || (typeof getShiftDown === 'function' && getShiftDown());
+        const ctrlPressed = !!evt.ctrlKey || (typeof getCtrlDown === 'function' && getCtrlDown());
+
+        // SHIFT/CTRL-click: add to selection instead of replacing
+        if ((shiftPressed || ctrlPressed) && state.selectedLongPositions.includes(hit.longPosition)) {
+            // Already selected - don't change selection, allow drag
+        } else if (shiftPressed || ctrlPressed) {
+            longPositions.addToSelection(hit.longPosition);
+        } else {
+            longPositions.select(hit.longPosition);
+        }
 
         // Capture the original mouse position AND the primitive's
         // original anchor pixel position at drag start.  This is
@@ -188,4 +199,6 @@ export function createLongPositionInteraction({
     container.addEventListener('mousemove', onMouseMove);
     window.addEventListener('mouseup', onMouseUp);
     container.addEventListener('dragstart', e => e.preventDefault());
+    // Prevent context menu on CTRL+click (needed for multi-select on Windows)
+    container.addEventListener('contextmenu', e => e.preventDefault());
 }

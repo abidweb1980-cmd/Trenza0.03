@@ -60,7 +60,7 @@ export function createTrendlineInteraction({
     }
     refreshTargetsIfNeeded();
 
-    function setCursorForHit(hit) {
+function setCursorForHit(hit) {
         ui.setChartCursor(hit ? 'cursor-grab' : 'cursor-default');
     }
 
@@ -75,12 +75,23 @@ export function createTrendlineInteraction({
             return;
         }
 
-        trendlines.select(hit.trendLine);
+        // Check for SHIFT/CTRL modifier (used for multi-select)
+        const shiftPressed = !!evt.shiftKey || (typeof getShiftDown === 'function' && getShiftDown());
+        const ctrlPressed = !!evt.ctrlKey || (typeof getCtrlDown === 'function' && getCtrlDown());
+
+        // SHIFT/CTRL-click: add to selection instead of replacing
+        if ((shiftPressed || ctrlPressed) && state.selectedTrendLines.includes(hit.trendLine)) {
+            // Already selected - don't change selection, allow drag
+        } else if (shiftPressed || ctrlPressed) {
+            trendlines.addToSelection(hit.trendLine);
+        } else {
+            trendlines.select(hit.trendLine);
+        }
 
         // Capture original mouse AND original p1 pixel
         // position so we can do the anchor-at-mousedown
-        // translate during body drag (full precision for slow
-        // movements).
+        // translate during body drag (full precision for
+        // slow movements).
         const anchorX = chart.timeScale().timeToCoordinate(hit.trendLine.p1.time);
         const anchorY = series.priceToCoordinate(hit.trendLine.p1.price);
         state.drag = {
@@ -175,4 +186,6 @@ export function createTrendlineInteraction({
     window.addEventListener('mouseup', onMouseUp);
     // Prevent text selection while dragging
     container.addEventListener('dragstart', e => e.preventDefault());
+    // Prevent context menu on CTRL+click (needed for multi-select on Windows)
+    container.addEventListener('contextmenu', e => e.preventDefault());
 }

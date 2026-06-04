@@ -1,8 +1,8 @@
 // rectangleInteraction.js
 // -----------------------------------------------------------------------------
 // Encapsulates rectangle interaction: hover, click-to-select, and drag
-// (8 handles + border + body).  Lives in idle mode only — the drawing
-// tool controller takes over while the rectangle tool is active.
+// (8 handles + border + body).  Lives in idle mode only — the
+// drawing tool controller takes over while the rectangle tool is active.
 //
 // The 8 resize handles are:
 //   • 4 corners  : 'tl' (top-left),  'tr' (top-right),
@@ -136,12 +136,24 @@ export function createRectangleInteraction({
 
         const { x, y } = getMousePixel(evt);
         const hit = rectangles.hitTest(x, y);
+        
+        // Check for SHIFT/CTRL modifier (used for multi-select)
+        const shiftPressed = !!evt.shiftKey || (typeof getShiftDown === 'function' && getShiftDown());
+        const ctrlPressed = !!evt.ctrlKey || (typeof getCtrlDown === 'function' && getCtrlDown());
+
         if (!hit) {
             rectangles.clearSelection();
             return;
         }
 
-        rectangles.select(hit.rectangle);
+        // SHIFT/CTRL-click: add to selection instead of replacing
+        if ((shiftPressed || ctrlPressed) && state.selectedRectangles.includes(hit.rectangle)) {
+            // Already selected - don't change selection, allow drag
+        } else if (shiftPressed || ctrlPressed) {
+            rectangles.addToSelection(hit.rectangle);
+        } else {
+            rectangles.select(hit.rectangle);
+        }
 
         // Capture original mouse AND original p1 pixel
         // position for the anchor-at-mousedown translate.
@@ -274,4 +286,6 @@ export function createRectangleInteraction({
     window.addEventListener('mouseup', onMouseUp);
     // Prevent text selection while dragging
     container.addEventListener('dragstart', e => e.preventDefault());
+    // Prevent context menu on CTRL+click (needed for multi-select on Windows)
+    container.addEventListener('contextmenu', e => e.preventDefault());
 }

@@ -19,8 +19,7 @@ export function createTrendlineManager(chart, series, state, color, requestRedra
     function create(p1, p2) {
         const tl = new NativeTrendLine(
             chart, series, p1, p2, color,
-            (changed) => { requestRedraw(); },            // onChange
-            (sel) => { select(sel); }                      // onSelect
+            (changed) => { requestRedraw(); }            // onChange
         );
         series.attachPrimitive(tl);
         state.trendLines.push(tl);
@@ -29,25 +28,61 @@ export function createTrendlineManager(chart, series, state, color, requestRedra
     }
 
     /**
-     * Mark the given trendline as the currently-selected one
-     * (deselecting the previous selection, if any).
+     * Select a trendline (single select - clears other selections).
+     * Use addToSelection() for multi-select behavior.
      */
     function select(tl) {
-        if (state.selectedTrendLine && state.selectedTrendLine !== tl) {
+        // Clear previous single selection
+        if (state.selectedTrendLine) {
             state.selectedTrendLine.setSelected(false);
         }
         state.selectedTrendLine = tl;
+        
+        // Also add to multi-selection array
+        if (tl && !state.selectedTrendLines.includes(tl)) {
+            state.selectedTrendLines.push(tl);
+        }
         if (tl) tl.setSelected(true);
+    }
+
+    /**
+     * Add to selection (for multi-select with SHIFT).
+     */
+    function addToSelection(tl) {
+        if (!tl || state.selectedTrendLines.includes(tl)) return;
+        
+        // Set as primary selection
+        state.selectedTrendLine = tl;
+        state.selectedTrendLines.push(tl);
+        tl.setSelected(true);
+    }
+
+    /**
+     * Deselect a specific trendline
+     */
+    function deselect(tl) {
+        const idx = state.selectedTrendLines.indexOf(tl);
+        if (idx !== -1) {
+            state.selectedTrendLines.splice(idx, 1);
+            tl.setSelected(false);
+        }
+        if (state.selectedTrendLine === tl) {
+            state.selectedTrendLine = state.selectedTrendLines.length > 0 
+                ? state.selectedTrendLines[state.selectedTrendLines.length - 1] 
+                : null;
+            if (state.selectedTrendLine) {
+                state.selectedTrendLine.setSelected(true);
+            }
+        }
     }
 
     /**
      * Deselect whatever is currently selected.
      */
     function clearSelection() {
-        if (state.selectedTrendLine) {
-            state.selectedTrendLine.setSelected(false);
-            state.selectedTrendLine = null;
-        }
+        state.selectedTrendLines.forEach(tl => tl.setSelected(false));
+        state.selectedTrendLines = [];
+        state.selectedTrendLine = null;
     }
 
     /**
@@ -83,9 +118,11 @@ export function createTrendlineManager(chart, series, state, color, requestRedra
         }
         const idx = state.trendLines.indexOf(tl);
         if (idx !== -1) state.trendLines.splice(idx, 1);
+        const selIdx = state.selectedTrendLines.indexOf(tl);
+        if (selIdx !== -1) state.selectedTrendLines.splice(selIdx, 1);
         if (state.selectedTrendLine === tl) state.selectedTrendLine = null;
         requestRedraw();
     }
 
-    return { create, select, clearSelection, hitTest, remove };
+    return { create, select, addToSelection, deselect, clearSelection, hitTest, remove };
 }

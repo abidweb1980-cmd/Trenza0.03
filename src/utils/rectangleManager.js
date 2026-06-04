@@ -10,8 +10,7 @@ export function createRectangleManager(chart, series, state, color, requestRedra
     function create(p1, p2) {
         const rect = new NativeRectangle(
             chart, series, p1, p2, color,
-            () => { requestRedraw(); },
-            (sel) => { select(sel); }
+            () => { requestRedraw(); }
         );
         series.attachPrimitive(rect);
         state.rectangles.push(rect);
@@ -20,18 +19,47 @@ export function createRectangleManager(chart, series, state, color, requestRedra
     }
 
     function select(rect) {
-        if (state.selectedRectangle && state.selectedRectangle !== rect) {
+        // Clear previous single selection
+        if (state.selectedRectangle) {
             state.selectedRectangle.setSelected(false);
         }
         state.selectedRectangle = rect;
+        
+        // Also add to multi-selection array
+        if (rect && !state.selectedRectangles.includes(rect)) {
+            state.selectedRectangles.push(rect);
+        }
         if (rect) rect.setSelected(true);
     }
 
-    function clearSelection() {
-        if (state.selectedRectangle) {
-            state.selectedRectangle.setSelected(false);
-            state.selectedRectangle = null;
+    function addToSelection(rect) {
+        if (!rect || state.selectedRectangles.includes(rect)) return;
+        
+        state.selectedRectangle = rect;
+        state.selectedRectangles.push(rect);
+        rect.setSelected(true);
+    }
+
+    function deselect(rect) {
+        const idx = state.selectedRectangles.indexOf(rect);
+        if (idx !== -1) {
+            state.selectedRectangles.splice(idx, 1);
+            rect.setSelected(false);
         }
+        if (state.selectedRectangle === rect) {
+            state.selectedRectangle = state.selectedRectangles.length > 0 
+                ? state.selectedRectangles[state.selectedRectangles.length - 1] 
+                : null;
+            if (state.selectedRectangle) {
+                state.selectedRectangle.setSelected(true);
+            }
+        }
+    }
+
+    function clearSelection() {
+        state.selectedRectangles.forEach(rect => rect.setSelected(false));
+        state.selectedRectangles = [];
+        state.selectedRectangle = null;
     }
 
     function hitTest(px, py) {
@@ -54,9 +82,11 @@ export function createRectangleManager(chart, series, state, color, requestRedra
         }
         const idx = state.rectangles.indexOf(rect);
         if (idx !== -1) state.rectangles.splice(idx, 1);
+        const selIdx = state.selectedRectangles.indexOf(rect);
+        if (selIdx !== -1) state.selectedRectangles.splice(selIdx, 1);
         if (state.selectedRectangle === rect) state.selectedRectangle = null;
         requestRedraw();
     }
 
-    return { create, select, clearSelection, hitTest, remove };
+    return { create, select, addToSelection, deselect, clearSelection, hitTest, remove };
 }

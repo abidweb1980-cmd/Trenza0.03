@@ -67,7 +67,7 @@ export function createFibonacciInteraction({
         ui.setChartCursor(hit ? 'cursor-grab' : 'cursor-default');
     }
 
-    function onMouseDown(evt) {
+function onMouseDown(evt) {
         if (state.mode !== 'idle') return;
         if (evt.button !== 0) return;
 
@@ -78,7 +78,18 @@ export function createFibonacciInteraction({
             return;
         }
 
-        fibs.select(hit.fib);
+        // Check for SHIFT/CTRL modifier (used for multi-select)
+        const shiftPressed = !!evt.shiftKey || (typeof getShiftDown === 'function' && getShiftDown());
+        const ctrlPressed = !!evt.ctrlKey || (typeof getCtrlDown === 'function' && getCtrlDown());
+
+        // SHIFT/CTRL-click: add to selection instead of replacing
+        if ((shiftPressed || ctrlPressed) && state.selectedFibs.includes(hit.fib)) {
+            // Already selected - don't change selection, allow drag
+        } else if (shiftPressed || ctrlPressed) {
+            fibs.addToSelection(hit.fib);
+        } else {
+            fibs.select(hit.fib);
+        }
 
         const anchorX = chart.timeScale().timeToCoordinate(hit.fib.p1.time);
         const anchorY = series.priceToCoordinate(hit.fib.p1.price);
@@ -186,4 +197,6 @@ if (shouldTranslate) {
     window.addEventListener('mouseup', onMouseUp);
     // Prevent text selection while dragging
     container.addEventListener('dragstart', e => e.preventDefault());
+    // Prevent context menu on CTRL+click (needed for multi-select on Windows)
+    container.addEventListener('contextmenu', e => e.preventDefault());
 }
