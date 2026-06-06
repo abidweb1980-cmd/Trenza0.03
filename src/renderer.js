@@ -100,6 +100,7 @@ if (moreBtn) {
 const FALLBACK_FILE = 'DAT_MT_XAUUSD_M1_2025.json';
 const PAGE_SIZE = 1440;
 const DUMMY_COUNT_LOCAL = DUMMY_COUNT;
+const INITIAL_TARGET_TS = 1753228800000; // 2025-07-23 00:00:00 UTC
 
 const lazyDataState = {
     realData: [],       // current in-memory candles (oldest -> newest)
@@ -120,7 +121,7 @@ async function initLazyChartData() {
 
     try {
         const res = await window.electronAPI.getHistoricalChunk({
-            targetTimestamp: null,
+            targetTimestamp: INITIAL_TARGET_TS,
             fileName: lazyDataState.currentFile,
             limit: PAGE_SIZE,
         });
