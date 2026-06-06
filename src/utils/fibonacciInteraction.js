@@ -67,7 +67,7 @@ export function createFibonacciInteraction({
         ui.setChartCursor(hit ? 'cursor-grab' : 'cursor-default');
     }
 
-function onMouseDown(evt) {
+    function onMouseDown(evt) {
         if (state.mode !== 'idle') return;
         if (evt.button !== 0) return;
 

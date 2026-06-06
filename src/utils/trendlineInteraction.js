@@ -60,7 +60,7 @@ export function createTrendlineInteraction({
     }
     refreshTargetsIfNeeded();
 
-function setCursorForHit(hit) {
+    function setCursorForHit(hit) {
         ui.setChartCursor(hit ? 'cursor-grab' : 'cursor-default');
     }
 

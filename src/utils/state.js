@@ -7,12 +7,8 @@ export const LONG_POSITION_COLOR = '#26a69a';
 
 export function createState() {
     return {
-        // 'idle'                 - no tool active
-        // 'drawing'              - trendline tool active
-        // 'rectangle-drawing'    - rectangle tool active
-        // 'fibonacci-drawing'    - fibonacci tool active
-        // 'long-position-drawing' - long position tool active
         mode: 'idle',
+        activeTool: null,
 
         // First point placed while in drawing mode
         drawingFirstPoint: null,
