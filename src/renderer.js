@@ -325,7 +325,7 @@ const replayToolBtn = document.querySelector('button[title="Replay"]');
 let replayUI = null;
 
 if (replayToolBtn) {
-    replayUI = createReplayUI(replayManager);
+    replayUI = createReplayUI(replayManager, replayToolBtn);
     replayUI.init();
 
     replayToolBtn.addEventListener('click', () => {
@@ -345,7 +345,17 @@ if (replayToolBtn) {
     });
 
     console.log('[renderer] Replay functionality initialized');
-}
+    }
+
+    // Keyboard shortcut: Right Arrow to step forward 1 minute (1 candle) in replay mode
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'ArrowRight' && replayManager && replayManager.isActive()) {
+            console.log('[renderer] ArrowRight pressed - stepping forward, state:', replayManager.getState(), 'buffer:', replayManager.getBufferInfo());
+            e.preventDefault();
+            e.stopPropagation();
+            replayManager.stepForward();
+        }
+    });
 
 // ---------- Trendline tool ----------
 const trendlines = createTrendlineManager(

@@ -71,7 +71,13 @@ async function* streamCandles(filePath, startTimestamp) {
     }
 }
 
+// Stream from real data file (for replay)
+const REAL_DATA_FILE = path.join(REAL_DATA_DIR, 'DAT_MT_XAUUSD_M1_2025.json');
+
 async function* streamAllCandles(startTimestamp) {
+    // First stream from real data file
+    yield* streamCandles(REAL_DATA_FILE, startTimestamp);
+    // Then fallback to sample files
     for (const file of DATA_FILES) {
         yield* streamCandles(file, startTimestamp);
     }
@@ -297,6 +303,22 @@ function registerIpcHandlers() {
             let totalBars = 0;
             let minTimestamp = Infinity;
             let maxTimestamp = -Infinity;
+            // Read from real data file first
+            if (fs.existsSync(REAL_DATA_FILE)) {
+                const rl = createInterface({ input: fs.createReadStream(REAL_DATA_FILE), crlfDelay: Infinity });
+                for await (const line of rl) {
+                    const trimmed = line.trim();
+                    if (trimmed.startsWith('{')) {
+                        try {
+                            const obj = JSON.parse(trimmed);
+                            totalBars++;
+                            if (obj.timestamp < minTimestamp) minTimestamp = obj.timestamp;
+                            if (obj.timestamp > maxTimestamp) maxTimestamp = obj.timestamp;
+                        } catch (_) {}
+                    }
+                }
+            }
+            // Then from sample files
             for (const file of DATA_FILES) {
                 if (!fs.existsSync(file)) continue;
                 const rl = createInterface({ input: fs.createReadStream(file), crlfDelay: Infinity });
@@ -320,25 +342,50 @@ function registerIpcHandlers() {
         });
 
         ipcMain.handle('replay:get-data-before', async (event, { endTimestamp }) => {
-            const results = [];
-            for (const file of DATA_FILES) {
-                if (!fs.existsSync(file)) continue;
-                const rl = createInterface({ input: fs.createReadStream(file), crlfDelay: Infinity });
-                for await (const line of rl) {
-                    const trimmed = line.trim();
-                    if (trimmed.startsWith('{')) {
+            const LIMIT = 2000;
+            const win = new Array(LIMIT).fill(null);
+            let wSize = 0;
+            let wStart = 0;
+
+            // Read from real data file
+            if (fs.existsSync(REAL_DATA_FILE)) {
+                const rl = createInterface({ input: fs.createReadStream(REAL_DATA_FILE), crlfDelay: Infinity });
+                let buf = '', depth = 0, inObj = false;
+                for await (const rawLine of rl) {
+                    const line = rawLine.trim();
+                    if (line === '' || line === '[' || line === ']') continue;
+                    for (const ch of line) {
+                        if (ch === '{') { depth++; inObj = true; }
+                        else if (ch === '}') depth--;
+                    }
+                    buf += rawLine + '\n';
+                    if (inObj && depth === 0) {
                         try {
-                            const obj = JSON.parse(trimmed);
-                            if (obj.timestamp < endTimestamp) results.push(obj);
+                            let cleanBuf = buf.trim();
+                            if (cleanBuf.endsWith(',')) cleanBuf = cleanBuf.slice(0, -1).trim();
+                            const obj = JSON.parse(cleanBuf);
+                            if (obj.timestamp < endTimestamp) {
+                                const idx = (wStart + wSize) % LIMIT;
+                                win[idx] = obj;
+                                if (wSize < LIMIT) wSize++;
+                                else wStart = (wStart + 1) % LIMIT;
+                            }
                         } catch (_) {}
+                        buf = '';
+                        inObj = false;
                     }
                 }
             }
-            results.sort((a, b) => a.timestamp - b.timestamp);
-            return results;
+
+            if (wSize === 0) return [];
+            const out = new Array(wSize);
+            for (let i = 0; i < wSize; i++) out[i] = win[(wStart + i) % LIMIT];
+            out.sort((a, b) => a.timestamp - b.timestamp);
+            return out;
         });
 
         ipcMain.handle('replay:start-stream', async (event, { startTimestamp, chunkSize = 500 }) => {
+            console.log('[main] replay:start-stream called with', startTimestamp, chunkSize);
             const replayId = `replay_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
             const iterator = streamAllCandles(startTimestamp);
             const firstChunk = [];
@@ -348,6 +395,7 @@ function registerIpcHandlers() {
                 firstChunk.push(value);
             }
             replayIterators.set(replayId, { iterator, chunkSize, startTimestamp });
+            console.log('[main] replay:start-stream returning', firstChunk.length, 'bars');
             return { replayId, totalBars: firstChunk.length, chunk: firstChunk, hasMore: true };
         });
 

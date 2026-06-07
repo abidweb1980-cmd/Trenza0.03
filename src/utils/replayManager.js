@@ -15,6 +15,9 @@ export function createReplayManager(chart, candlestickSeries) {
     let dataBeforeReplay = [];
     let buffer = [];
     let autoScroll = true;
+    
+    // Combined data array (initial + streamed bars)
+    let allData = [];
 
     // Playback timing state
     let lastBarTime = 0;
@@ -70,38 +73,68 @@ export function createReplayManager(chart, candlestickSeries) {
         }
 
         try {
-            console.log('[ReplayManager] Starting replay at timestamp:', timestamp);
+            console.log('[ReplayManager] Starting replay at timestamp:', timestamp, '(' + new Date(timestamp).toISOString() + ')');
             replayStartTimestamp = timestamp;
 
             // Get data before the replay start point
             const dataBefore = await window.replayAPI.getDataBefore(timestamp);
+            console.log('[ReplayManager] Data before replay:', dataBefore.length, 'bars, last:', dataBefore.length ? new Date(dataBefore[dataBefore.length-1].timestamp).toISOString() : 'none');
             dataBeforeReplay = dataBefore;
-            console.log('[ReplayManager] Data before replay:', dataBefore.length, 'bars');
 
-            const formattedData = dataBefore.map(candle => ({
-                time: candle.timestamp / 1000,
-                open: candle.open,
-                high: candle.high,
-                low: candle.low,
-                close: candle.close,
-            }));
-
-            candlestickSeries.setData(formattedData);
-
-            if (formattedData.length > 0) {
-                const pad = 50;
-                const fromIdx = Math.max(0, formattedData.length - 100);
-                const toIdx = formattedData.length + pad;
-                chart.timeScale().setVisibleLogicalRange({ from: fromIdx, to: toIdx });
+            // Build initial data - all bars before replay starts
+            let allDataTemp = [];
+            for (const candle of dataBefore) {
+                allDataTemp.push({
+                    time: candle.timestamp / 1000,
+                    open: candle.open,
+                    high: candle.high,
+                    low: candle.low,
+                    close: candle.close,
+                });
             }
+            console.log('[ReplayManager] Built initial data:', allDataTemp.length);
 
             // Start stream and wait for first chunk
             await startStreamAndPreload(timestamp);
+            console.log('[ReplayManager] Initial buffer after preload:', buffer.length, 'bars');
+
+            // Add first bar from buffer to initial data
+            if (buffer.length > 0) {
+                const firstBar = buffer.shift();
+                console.log('[ReplayManager] Adding first streamed bar:', new Date(firstBar.timestamp).toISOString());
+                allDataTemp.push({
+                    time: firstBar.timestamp / 1000,
+                    open: firstBar.open,
+                    high: firstBar.high,
+                    low: firstBar.low,
+                    close: firstBar.close,
+                });
+            }
+            
+            console.log('[ReplayManager] Final allData length:', allDataTemp.length);
+
+            // Update module-level allData
+            allData = allDataTemp;
+            
+            // Set data on chart
+            try {
+                candlestickSeries.setData(allData);
+                console.log('[ReplayManager] Chart data set successfully');
+            } catch (e) {
+                console.error('[ReplayManager] Failed to set chart data:', e);
+            }
+
+            if (allData.length > 0) {
+                const pad = 50;
+                const fromIdx = Math.max(0, allData.length - 100);
+                const toIdx = allData.length + pad;
+                chart.timeScale().setVisibleLogicalRange({ from: fromIdx, to: toIdx });
+            }
 
             currentState = STATES.ACTIVE;
+            console.log('[ReplayManager] State changed to ACTIVE');
             if (onStateChange) onStateChange(currentState);
 
-            console.log('[ReplayManager] Replay ready, buffer:', buffer.length, 'bars');
             return true;
         } catch (error) {
             console.error('[ReplayManager] Error starting replay:', error);
@@ -111,15 +144,15 @@ export function createReplayManager(chart, candlestickSeries) {
     }
 
     async function startStreamAndPreload(timestamp) {
+        console.log('[ReplayManager] startStreamAndPreload called with timestamp:', timestamp, '(' + new Date(timestamp).toISOString() + ')');
         const streamInfo = await window.replayAPI.startStream(timestamp, BUFFER_REQUEST_SIZE);
+        console.log('[ReplayManager] startStream returned:', streamInfo);
         replayId = streamInfo.replayId;
 
         if (streamInfo.chunk && streamInfo.chunk.length > 0) {
             buffer.push(...streamInfo.chunk);
-            console.log('[ReplayManager] Initial buffer:', buffer.length, 'bars');
-        } else {
-            console.warn('[ReplayManager] Stream returned empty first chunk');
         }
+        console.log('[ReplayManager] Buffer after preload:', buffer.length);
     }
 
     function stopReplay() {
@@ -134,12 +167,12 @@ export function createReplayManager(chart, candlestickSeries) {
         replayStartTimestamp = null;
         dataBeforeReplay = [];
         buffer = [];
+        allData = [];
         currentState = STATES.IDLE;
         lastBarTime = 0;
         targetNextTime = 0;
 
         if (onStateChange) onStateChange(currentState);
-        console.log('[ReplayManager] Replay stopped');
     }
 
     // requestAnimationFrame-based playback loop
@@ -201,12 +234,12 @@ export function createReplayManager(chart, candlestickSeries) {
         }
 
         if (buffer.length === 0) {
-            console.log('[ReplayManager] Buffer empty, pausing playback');
-            stopPlayback();
+            console.log('[ReplayManager] Buffer empty');
             return;
         }
 
         const nextBar = buffer.shift();
+        console.log('[ReplayManager] Playing bar:', new Date(nextBar.timestamp).toISOString());
         const formattedBar = {
             time: nextBar.timestamp / 1000,
             open: nextBar.open,
@@ -215,7 +248,9 @@ export function createReplayManager(chart, candlestickSeries) {
             close: nextBar.close,
         };
 
-        candlestickSeries.update(formattedBar);
+        // Append bar to allData
+        allData.push(formattedBar);
+        candlestickSeries.setData(allData);
 
         // Auto-scroll to keep the new bar in view
         if (autoScroll) {
@@ -232,13 +267,14 @@ export function createReplayManager(chart, candlestickSeries) {
 
         if (onProgressUpdate) {
             onProgressUpdate({
-                currentBar: dataBeforeReplay.length + 1,
+                currentBar: allData.length,
                 totalBuffered: buffer.length,
             });
         }
     }
 
     function stepForward() {
+        console.log('[ReplayManager] stepForward called, state:', currentState, 'buffer:', buffer.length);
         if (currentState === STATES.IDLE) {
             console.warn('[ReplayManager] Cannot step, replay not active');
             return;
@@ -246,6 +282,23 @@ export function createReplayManager(chart, candlestickSeries) {
 
         if (currentState === STATES.PLAYING) {
             stopPlayback();
+        }
+
+        // If buffer is empty, request chunk synchronously
+        if (buffer.length === 0 && replayId) {
+            console.log('[ReplayManager] Buffer empty, requesting more');
+            window.replayAPI.requestChunk(replayId).then(({ chunk }) => {
+                console.log('[ReplayManager] Got chunk:', chunk ? chunk.length : 0);
+                if (chunk && chunk.length > 0) {
+                    buffer.push(...chunk);
+                }
+                if (buffer.length > 0) {
+                    playNextBar();
+                } else {
+                    console.warn('[ReplayManager] Still empty after request');
+                }
+            });
+            return;
         }
 
         playNextBar();
@@ -259,18 +312,15 @@ export function createReplayManager(chart, candlestickSeries) {
 
             if (chunk.length > 0) {
                 buffer.push(...chunk);
-                console.log('[ReplayManager] Buffered', chunk.length, 'bars, total:', buffer.length);
             }
 
             if (!hasMore) {
-                console.log('[ReplayManager] No more data available');
             }
 
             if (onBufferLow) {
                 onBufferLow({ bufferSize: buffer.length, isLow: buffer.length < BUFFER_LOW_THRESHOLD });
             }
         } catch (error) {
-            console.error('[ReplayManager] Error requesting chunk:', error);
         }
     }
 

@@ -38,10 +38,10 @@ export function createReplayUI(replayManager, replayTool) {
         setupEventListeners();
         setupCallbacks();
 
-        // Set default date to 2021-01-01 (or earliest data)
+        // Set default date to July 23, 2025 (within real data range)
         if (startDateInput) {
-            startDateInput.value = '2021-01-01';
-            startDateInput.max = new Date().toISOString().split('T')[0];
+            startDateInput.value = '2025-07-23';
+            startDateInput.max = '2025-12-31';
         }
 
         console.log('[ReplayUI] Initialized');
@@ -142,9 +142,8 @@ export function createReplayUI(replayManager, replayTool) {
         startReplayBtn.addEventListener('click', async () => {
             if (!replayManager) return;
 
-            // HARDCODED DATE FOR TESTING: 2021-01-03 18:00:00 UTC
-            // Matches the start of sample.json. Replace with dynamic logic later.
-            const timestamp = 1609675200000; 
+            // Use July 23, 2025 00:00:00 UTC (within real data range)
+            const timestamp = 1753228800000;
 
             startReplayBtn.disabled = true;
             startReplayBtn.innerHTML = '<i class="bi bi-hourglass-split"></i> Loading...';
