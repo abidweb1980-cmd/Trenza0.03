@@ -1,3 +1,5 @@
+import { extendWithDummies } from './dataExtension.js';
+
 // Replay Manager - Handles the bar replay functionality with precise playback timing
 export function createReplayManager(chart, candlestickSeries) {
     // Replay states
@@ -18,6 +20,10 @@ export function createReplayManager(chart, candlestickSeries) {
     
     // Combined data array (initial + streamed bars)
     let allData = [];
+    
+    // Trailing dummies for drawing beyond the candle range
+    let trailingDummies = [];
+    const DUMMY_COUNT = 1000;
 
     // Playback timing state
     let lastBarTime = 0;
@@ -113,20 +119,35 @@ export function createReplayManager(chart, candlestickSeries) {
             
             console.log('[ReplayManager] Final allData length:', allDataTemp.length);
 
-            // Update module-level allData
+            // Update module-level allData and add trailing dummies for drawing range
             allData = allDataTemp;
+            // Create trailing dummies to allow drawing beyond the candle range
+            if (allData.length > 0) {
+                const lastRealBar = allDataTemp[allDataTemp.length - 1];
+                trailingDummies = [];
+                for (let i = 1; i <= DUMMY_COUNT; i++) {
+                    trailingDummies.push({
+                        time: lastRealBar.time + i * 60, // 60 seconds = 1 minute
+                        open: lastRealBar.close,
+                        high: lastRealBar.close,
+                        low: lastRealBar.close,
+                        close: lastRealBar.close,
+                    });
+                }
+                allData = [...allData, ...trailingDummies];
+            }
             
             // Set data on chart
             try {
                 candlestickSeries.setData(allData);
-                console.log('[ReplayManager] Chart data set successfully');
+                console.log('[ReplayManager] Chart data set successfully with', allData.length, 'bars');
             } catch (e) {
                 console.error('[ReplayManager] Failed to set chart data:', e);
             }
 
             if (allData.length > 0) {
                 const pad = 50;
-                const fromIdx = Math.max(0, allData.length - 100);
+                const fromIdx = Math.max(0, allData.length - DUMMY_COUNT - 200);
                 const toIdx = allData.length + pad;
                 chart.timeScale().setVisibleLogicalRange({ from: fromIdx, to: toIdx });
             }
@@ -248,8 +269,24 @@ export function createReplayManager(chart, candlestickSeries) {
             close: nextBar.close,
         };
 
-        // Append bar to allData
-        allData.push(formattedBar);
+        // Insert bar BEFORE trailing dummies
+        const realData = allData.slice(0, -trailingDummies.length);
+        realData.push(formattedBar);
+        
+        // Update trailing dummies starting from this new bar
+        trailingDummies = [];
+        const nextBarTime = formattedBar.time;
+        for (let i = 1; i <= DUMMY_COUNT; i++) {
+            trailingDummies.push({
+                time: nextBarTime + i * 60, // 60 seconds = 1 minute
+                open: nextBar.close,
+                high: nextBar.close,
+                low: nextBar.close,
+                close: nextBar.close,
+            });
+        }
+        
+        allData = [...realData, ...trailingDummies];
         candlestickSeries.setData(allData);
 
         // Auto-scroll to keep the new bar in view
@@ -267,7 +304,7 @@ export function createReplayManager(chart, candlestickSeries) {
 
         if (onProgressUpdate) {
             onProgressUpdate({
-                currentBar: allData.length,
+                currentBar: allData.length - trailingDummies.length,
                 totalBuffered: buffer.length,
             });
         }
