@@ -25,7 +25,7 @@ import { createLongPositionTool } from './utils/longPositionTool.js';
 import { createLongPositionInteraction } from './utils/longPositionInteraction.js';
 import { extendWithDummies } from './utils/dataExtension.js';
 
-const DUMMY_COUNT = 300;
+const DUMMY_COUNT = 20;
 
 const container = document.getElementById('chart-container');
 const chartArea = document.getElementById('chart-area');
@@ -35,6 +35,12 @@ const rectangleToolBtn = document.getElementById('rectangle-tool');
 const fibonacciToolBtn = document.getElementById('fibonacci-tool');
 const longPositionToolBtn = document.getElementById('long-position-tool');
 const moreBtn = document.getElementById('load-more-btn');
+
+// Timeframe UI elements
+const timeframeBtn = document.getElementById('timeframe-btn');
+const timeframeDropdown = document.getElementById('timeframe-dropdown');
+const timeframeLabel = document.getElementById('timeframe-label');
+const tfOptions = document.querySelectorAll('.tf-option');
 
 const chart = createChart(container, {
     layout: { background: { color: '#1a1a1a' }, textColor: '#e1e1e1' },
@@ -84,32 +90,53 @@ if (moreBtn) {
 }
 
 // ============================================================================
-// LAZY-LOADING CHART DATA
+// LAZY-LOADING CHART DATA - Multi-Timeframe
 // ============================================================================
 //
-// Simple pagination model:
-//   - Initial load: last 1440 candles of the 2025 real-data file.
-//   - "More" button: when clicked, loads the previous 1440 candles
-//     (still scoped to the same file until the file is exhausted,
-//     then the renderer falls back to older files).
-//
-// The renderer's in-memory `realData` is the source of truth for the
-// chart; the main process just returns 1440-candle slices on demand.
+// Architecture:
+//  - The current timeframe is stored in `currentTimeframe` (e.g. 'M1', 'H1', 'D1').
+//  - On startup, the latest 1440 candles of the active timeframe are loaded.
+//  - Switching timeframe: clears the series, requests the new file, applies data.
+//  - Drawings are global (absolute time/price) and re-applied after each switch.
 // ============================================================================
 
-const FALLBACK_FILE = 'DAT_MT_XAUUSD_M1_2025.json';
+// Global replay state for synchronization
+const replayState = {
+    isReplayActive: false,
+    currentReplayTimestamp: null,
+    currentResolution: 60, // seconds per bar (will be updated based on timeframe)
+};
+
+// Timeframe resolution mapping (seconds per bar)
+const TIMEFRAME_RESOLUTION = {
+    'M1': 60, 'M2': 120, 'M3': 180, 'M5': 300, 'M15': 900, 'M30': 1800,
+    'H1': 3600, 'H2': 7200, 'H4': 14400, 'H12': 43200, 'D1': 86400
+};
+
 const PAGE_SIZE = 1440;
 const DUMMY_COUNT_LOCAL = DUMMY_COUNT;
-const INITIAL_TARGET_TS = 1753228800000; // 2025-07-23 00:00:00 UTC
+const INITIAL_TIMEFRAME = 'D1';
+const INITIAL_TARGET_TS = null;
+const ASSET = 'XAUUSD';
+
+const TF_LABEL = {
+    'M1': '1m', 'M2': '2m', 'M3': '3m', 'M5': '5m', 'M15': '15m', 'M30': '30m',
+    'H1': '1H', 'H2': '2H', 'H4': '4H', 'H12': '12H', 'D1': '1D'
+};
 
 const lazyDataState = {
-    realData: [],       // current in-memory candles (oldest -> newest)
+    realData: [],
     isLoading: false,
     hasMore: true,
-    currentFile: FALLBACK_FILE,  // file we are currently paging through
-    pageCount: 0,                  // number of pages already loaded
+    currentTimeframe: INITIAL_TIMEFRAME,
+    currentFile: null,
+    pageCount: 0,
     dummyCount: DUMMY_COUNT_LOCAL,
+    isSwitchingTimeframe: false,
 };
+
+// Expose for other modules to access
+window.lazyDataState = lazyDataState;
 
 initLazyChartData();
 
@@ -118,21 +145,156 @@ async function initLazyChartData() {
         console.error('[renderer] electronAPI.getHistoricalChunk is not available');
         return;
     }
-
     try {
         const res = await window.electronAPI.getHistoricalChunk({
             targetTimestamp: INITIAL_TARGET_TS,
-            fileName: lazyDataState.currentFile,
+            timeframe: lazyDataState.currentTimeframe,
+            asset: ASSET,
             limit: PAGE_SIZE,
         });
         lazyDataState.realData = res.chunk || [];
         lazyDataState.hasMore = !!res.hasMore;
+        lazyDataState.currentFile = res.fileName || null;
         lazyDataState.pageCount = 1;
         applyToChart({ initial: true });
         updateMoreButton();
+        // Load global drawings from main process and apply them
+        await loadAndApplyGlobalDrawings();
     } catch (err) {
         console.error('[renderer] lazy init failed:', err);
     }
+}
+
+/**
+ * Switch to a different timeframe: clear series, request new file, apply data, reapply drawings
+ * During active replay, truncates data to current replay timestamp
+ */
+async function switchTimeframe(newTimeframe) {
+    if (newTimeframe === lazyDataState.currentTimeframe) {
+        // Close the dropdown
+        if (timeframeDropdown) timeframeDropdown.classList.remove('open');
+        return;
+    }
+    if (lazyDataState.isSwitchingTimeframe) return;
+    lazyDataState.isSwitchingTimeframe = true;
+
+    // Update the label
+    if (timeframeLabel) timeframeLabel.textContent = TF_LABEL[newTimeframe] || newTimeframe;
+    if (tfOptions) {
+        tfOptions.forEach(o => o.classList.toggle('active', o.dataset.tf === newTimeframe));
+    }
+    if (timeframeDropdown) timeframeDropdown.classList.remove('open');
+
+    console.log('[renderer] switching timeframe to', newTimeframe);
+
+    // Update current resolution
+    replayState.currentResolution = TIMEFRAME_RESOLUTION[newTimeframe] || 60;
+
+    // 1. Save current drawings to the global store before switching
+    await saveAllDrawingsToMain();
+
+    // 2. Clear the current chart series
+    try {
+        candlestickSeries.setData([]);
+    } catch (e) {
+        console.warn('[renderer] clear setData:', e);
+    }
+
+    // 3. Reset state for the new timeframe
+    lazyDataState.realData = [];
+    lazyDataState.hasMore = true;
+    lazyDataState.pageCount = 0;
+    lazyDataState.currentTimeframe = newTimeframe;
+    lazyDataState.currentFile = null;
+
+    // 4. Fetch data - during replay, truncate to current replay timestamp
+    try {
+        const requestParams = {
+            timeframe: newTimeframe,
+            asset: ASSET,
+            limit: PAGE_SIZE,
+        };
+
+        // If replay is active, get truncated data using the dedicated handler
+        const currentTs = getCurrentReplayTimestamp();
+        if (isReplayActive() && currentTs) {
+            console.log('[renderer] Getting truncated data for timeframe:', newTimeframe, 'maxTimestamp:', currentTs);
+            const res = await window.replayAPI.getTruncatedData({
+                timeframe: newTimeframe,
+                maxTimestamp: currentTs,
+                limit: PAGE_SIZE,
+            });
+            lazyDataState.realData = res || [];
+            lazyDataState.hasMore = false; // Don't allow loading more during replay
+            lazyDataState.currentFile = null;
+            lazyDataState.pageCount = 1;
+        } else {
+            // Normal data fetch
+            const res = await window.electronAPI.getHistoricalChunk(requestParams);
+            lazyDataState.realData = res.chunk || [];
+            lazyDataState.hasMore = !!res.hasMore;
+            lazyDataState.currentFile = res.fileName || null;
+            lazyDataState.pageCount = 1;
+        }
+
+        // 5. Apply new data to the chart
+        applyToChart({ initial: true });
+        updateMoreButton();
+
+        // 6. Re-apply all global drawings (they use absolute time/price)
+        await applyGlobalDrawingsToChart();
+    } catch (err) {
+        console.error('[renderer] switchTimeframe failed:', err);
+    } finally {
+        lazyDataState.isSwitchingTimeframe = false;
+    }
+}
+
+/**
+ * Sync replay state from main process
+ */
+async function syncReplayState() {
+    if (!window.electronAPI || !window.electronAPI.getReplayState) return;
+    try {
+        const state = await window.electronAPI.getReplayState();
+        replayState.isReplayActive = state.isPlaying;
+        replayState.currentReplayTimestamp = state.currentReplayTimestamp;
+        replayState.currentResolution = TIMEFRAME_RESOLUTION[lazyDataState.currentTimeframe] || 60;
+        console.log('[renderer] Synced replay state:', state);
+    } catch (err) {
+        console.error('[renderer] Failed to sync replay state:', err);
+    }
+}
+
+/**
+ * Update local replay state from tick
+ */
+function updateReplayStateFromTick(candle) {
+    replayState.currentReplayTimestamp = candle.timestamp;
+    replayState.currentResolution = TIMEFRAME_RESOLUTION[lazyDataState.currentTimeframe] || 60;
+}
+
+/**
+ * Get current replay timestamp (for timeframe switching)
+ */
+function getCurrentReplayTimestamp() {
+    // First check local state
+    if (replayState.currentReplayTimestamp) {
+        return replayState.currentReplayTimestamp;
+    }
+    // Fallback to replayManager state
+    if (replayManager && typeof replayManager.getReplayInfo === 'function') {
+        const info = replayManager.getReplayInfo();
+        return info.startTimestamp;
+    }
+    return null;
+}
+
+/**
+ * Check if replay is currently active
+ */
+function isReplayActive() {
+    return replayState.isReplayActive || (replayManager && replayManager.isActive());
 }
 
 /**
@@ -149,17 +311,15 @@ async function loadOlderChunk() {
     if (moreBtn) moreBtn.disabled = true;
 
     try {
-        console.log('[renderer] loadOlderChunk: oldestTs=', oldestTs, 'file=', lazyDataState.currentFile);
         const res = await window.electronAPI.getHistoricalChunk({
             targetTimestamp: oldestTs,
-            fileName: lazyDataState.currentFile,
+            timeframe: lazyDataState.currentTimeframe,
+            asset: ASSET,
             limit: PAGE_SIZE,
         });
-        console.log('[renderer] loadOlderChunk: got chunk length=', res?.chunk?.length, 'hasMore=', res?.hasMore, 'first ts=', res?.chunk?.[0]?.timestamp, 'last ts=', res?.chunk?.[res.chunk.length-1]?.timestamp);
         if (!res.chunk || res.chunk.length === 0) {
-            // Nothing left in this file. Try to move to the next-older
-            // file in the index.
-            const nextFile = await pickNextOlderFile(lazyDataState.currentFile);
+            // Try other timeframes files in chronological order
+            const nextFile = await pickNextOlderFileForTimeframe(lazyDataState.currentTimeframe);
             if (nextFile) {
                 lazyDataState.currentFile = nextFile;
                 const head = await window.electronAPI.getHistoricalChunk({
@@ -181,24 +341,9 @@ async function loadOlderChunk() {
 
         // PREPEND the newly fetched older data
         const prevRealLen = lazyDataState.realData.length;
-        console.log('[renderer] prepending', res.chunk.length, 'candles. Old realData length:', prevRealLen);
         lazyDataState.realData = [...res.chunk, ...lazyDataState.realData];
         lazyDataState.hasMore = !!res.hasMore;
         lazyDataState.pageCount += 1;
-        console.log('[renderer] new realData length:', lazyDataState.realData.length, 'first ts:', lazyDataState.realData[0]?.timestamp, 'last ts:', lazyDataState.realData[lazyDataState.realData.length-1]?.timestamp);
-
-        // If we got back fewer than PAGE_SIZE candles AND hasMore is false,
-        // we should also try to move into the next-older file automatically.
-        if (res.chunk.length < PAGE_SIZE && !lazyDataState.hasMore) {
-            const nextFile = await pickNextOlderFile(lazyDataState.currentFile);
-            if (nextFile) {
-                lazyDataState.currentFile = nextFile;
-                // nothing to load here — user will hit "More" again.
-                // (Or we could chain automatically, but keeping it
-                // explicit via the button is clearer.)
-            }
-        }
-
         applyToChart({ initial: false, prependedCount: res.chunk.length, prevRealLen });
     } catch (err) {
         console.error('[renderer] failed to load older chunk:', err);
@@ -208,19 +353,17 @@ async function loadOlderChunk() {
     }
 }
 
-/**
- * Find the file immediately older than `currentFileName` in the real-data
- * index. Returns null if there is no such file or the index isn't loaded.
- */
-async function pickNextOlderFile(currentFileName) {
+async function pickNextOlderFileForTimeframe(tf) {
     if (!window.electronAPI.getRealDataInfo) return null;
     try {
         const info = await window.electronAPI.getRealDataInfo();
         if (!info || !Array.isArray(info.files)) return null;
-        const sorted = info.files.slice().sort((a, b) => a.firstTimestamp - b.firstTimestamp);
-        const idx = sorted.findIndex(f => f.name === currentFileName);
-        if (idx < 0 || idx >= sorted.length - 1) return null;
-        return sorted[idx + 1].name;
+        // Only consider files for the current timeframe, sorted ascending by first timestamp
+        const sameTf = info.files.filter(f => f.timeframe === tf).sort((a, b) => a.firstTimestamp - b.firstTimestamp);
+        if (sameTf.length === 0) return null;
+        const idx = lazyDataState.currentFile ? sameTf.findIndex(f => f.name === lazyDataState.currentFile) : -1;
+        if (idx < 0 || idx >= sameTf.length - 1) return null;
+        return sameTf[idx + 1].name;
     } catch (_) {
         return null;
     }
@@ -230,7 +373,6 @@ function updateMoreButton() {
     if (!moreBtn) return;
     moreBtn.disabled = lazyDataState.isLoading || !lazyDataState.hasMore;
     moreBtn.textContent = lazyDataState.hasMore ? '' : ' (no more)';
-    // Restore the icon + label
     if (!moreBtn.querySelector('i')) {
         moreBtn.innerHTML = '<i class="bi bi-arrow-left-circle"></i><span>More</span>';
     }
@@ -251,16 +393,10 @@ function updateMoreButton() {
 function applyToChart({ initial = false, prependedCount = 0, prevRealLen = null } = {}) {
     try {
     const oldRange = chart.timeScale().getVisibleLogicalRange();
-    // If we were given an explicit prependedCount + prevRealLen (the
-    // length of realData BEFORE the prepend), use those — they are
-    // authoritative. Otherwise fall back to the in-function value.
     const capturedOldRealLen = prevRealLen !== null ? prevRealLen : lazyDataState.realData.length;
-    console.log('[renderer] applyToChart: initial=', initial, 'capturedOldRealLen=', capturedOldRealLen, 'oldRange=', JSON.stringify(oldRange), 'prependedCount=', prependedCount);
 
     const extended = extendWithDummies(lazyDataState.realData, lazyDataState.dummyCount);
 
-    // Dedupe by timestamp and ensure strict ascending order, otherwise
-    // Lightweight Charts' setData() throws and the chart goes blank.
     const seenTs = new Set();
     const deduped = [];
     for (const c of extended) {
@@ -276,16 +412,13 @@ function applyToChart({ initial = false, prependedCount = 0, prevRealLen = null 
         open: c.open, high: c.high, low: c.low, close: c.close,
     }));
 
-    console.log('[renderer] setData: formatted.length=', formatted.length, 'first ts=', formatted[0]?.time, 'last ts=', formatted[formatted.length-1]?.time);
     try {
         candlestickSeries.setData(formatted);
-        console.log('[renderer] setData: OK');
     } catch (e) {
         console.error('[renderer] setData threw:', e);
     }
 
     if (initial) {
-        // Fit the view to the loaded chunk
         const realCount = lazyDataState.realData.length;
         const pad = 5;
         const fromIdx = Math.max(0, lazyDataState.dummyCount - pad);
@@ -295,12 +428,7 @@ function applyToChart({ initial = false, prependedCount = 0, prevRealLen = null 
     }
 
     if (oldRange) {
-        // We just prepended N candles. Shift the visible range LEFT by
-        // N so the user actually sees the newly-loaded older data.
-        // (prependedCount is set by the caller; for the initial load
-        // it stays 0 and we use the dedicated initial branch above.)
         const shift = -prependedCount;
-        console.log('[renderer] applyToChart: shifting visible range by', shift, '(prependedCount=', prependedCount, ')');
         try {
             chart.timeScale().setVisibleLogicalRange({
                 from: oldRange.from + shift,
@@ -316,6 +444,7 @@ function applyToChart({ initial = false, prependedCount = 0, prevRealLen = null 
 }
 
 const state = createState();
+state.currentTimeframe = lazyDataState.currentTimeframe;
 const ui = createUI(chartArea, toolStatus, chart);
 const chartLock = createChartLock(chart);
 
@@ -344,24 +473,11 @@ if (replayToolBtn) {
         }
     });
 
-    // Set up tick listener for interval-based playback from main process
     const unsubscribeTick = window.replayAPI.onTick((candle) => {
-        console.log('[renderer] Received tick:', new Date(candle.timestamp).toISOString());
         replayManager.handleTick(candle);
+        updateReplayStateFromTick(candle);
     });
-
-    console.log('[renderer] Replay functionality initialized');
-    }
-
-    // Keyboard shortcut: Right Arrow to step forward 1 minute (1 candle) in replay mode
-    document.addEventListener('keydown', (e) => {
-        if (e.key === 'ArrowRight' && replayManager && replayManager.isActive()) {
-            console.log('[renderer] ArrowRight pressed - stepping forward');
-            e.preventDefault();
-            e.stopPropagation();
-            window.replayAPI.step();
-        }
-    });
+}
 
 // ---------- Trendline tool ----------
 const trendlines = createTrendlineManager(
@@ -440,21 +556,212 @@ createLongPositionInteraction({
     getCtrlDown:   () => longPositionDrawingTool.getCtrlDown(),
 });
 
+// ============================================================================
+// CENTRALIZED DRAWING STORE - SYNCING LOGIC
+// ============================================================================
+//
+// Drawings use absolute Unix timestamps (ms) and absolute prices so they are
+// globally independent of any specific timeframe. They are mirrored to the
+// main process's `globalDrawings` array via `save-drawings`, and re-applied
+// on load or on timeframe switch via `get-drawings`.
+// ============================================================================
+
+/**
+ * Collect all current drawings from the various manager arrays in `state`,
+ * normalize them to { type, time1, time2, price1, price2, color, ... }
+ * using ABSOLUTE Unix timestamps (ms) and ABSOLUTE prices.
+ */
+function collectAllDrawings() {
+    const all = [];
+
+    // Trendlines
+    if (state.trendLines) {
+        for (const tl of state.trendLines) {
+            if (!tl || !tl.p1 || !tl.p2) continue;
+            const t1 = typeof tl.p1.time === 'number' && tl.p1.time < 1e12 ? tl.p1.time * 1000 : tl.p1.time;
+            const t2 = typeof tl.p2.time === 'number' && tl.p2.time < 1e12 ? tl.p2.time * 1000 : tl.p2.time;
+            all.push({
+                type: 'trendline',
+                time1: t1,
+                price1: tl.p1.price,
+                time2: t2,
+                price2: tl.p2.price,
+                color: tl.color || TRENDLINE_COLOR,
+            });
+        }
+    }
+
+    // Rectangles
+    if (state.rectangles) {
+        for (const r of state.rectangles) {
+            if (!r || !r.p1 || !r.p2) continue;
+            const t1 = typeof r.p1.time === 'number' && r.p1.time < 1e12 ? r.p1.time * 1000 : r.p1.time;
+            const t2 = typeof r.p2.time === 'number' && r.p2.time < 1e12 ? r.p2.time * 1000 : r.p2.time;
+            all.push({
+                type: 'rectangle',
+                time1: t1,
+                price1: r.p1.price,
+                time2: t2,
+                price2: r.p2.price,
+                color: r.color || RECTANGLE_COLOR,
+            });
+        }
+    }
+
+    // Fibonacci
+    if (state.fibs) {
+        for (const f of state.fibs) {
+            if (!f || !f.p1 || !f.p2) continue;
+            const t1 = typeof f.p1.time === 'number' && f.p1.time < 1e12 ? f.p1.time * 1000 : f.p1.time;
+            const t2 = typeof f.p2.time === 'number' && f.p2.time < 1e12 ? f.p2.time * 1000 : f.p2.time;
+            all.push({
+                type: 'fibonacci',
+                time1: t1,
+                price1: f.p1.price,
+                time2: t2,
+                price2: f.p2.price,
+                color: f.color || FIBONACCI_COLOR,
+                direction: f.direction || 'up',
+                levels: f.levels || null,
+            });
+        }
+    }
+
+    // Long Positions
+    if (state.longPositions) {
+        for (const lp of state.longPositions) {
+            if (!lp || !lp.entry || !lp.stopLoss || !lp.takeProfit) continue;
+            const tEntry = typeof lp.entry.time === 'number' && lp.entry.time < 1e12 ? lp.entry.time * 1000 : lp.entry.time;
+            all.push({
+                type: 'longposition',
+                time1: tEntry,
+                price1: lp.entry.price,
+                time2: tEntry,
+                price2: lp.takeProfit.price,
+                stopLoss: lp.stopLoss.price,
+                riskRewardRatio: lp.riskRewardRatio || 2,
+                color: lp.color || LONG_POSITION_COLOR,
+            });
+        }
+    }
+
+    return all;
+}
+
+/**
+ * Save all current drawings to the main process's `globalDrawings` store
+ * via the `save-drawings` IPC handler.
+ */
+async function saveAllDrawingsToMain() {
+    if (!window.electronAPI || !window.electronAPI.saveDrawings) return;
+    try {
+        const all = collectAllDrawings();
+        const result = await window.electronAPI.saveDrawings(all);
+        console.log('[renderer] saveAllDrawingsToMain:', result);
+    } catch (err) {
+        console.error('[renderer] saveAllDrawingsToMain error:', err);
+    }
+}
+
+/**
+ * Remove every drawing from the chart (in-memory and from the series primitives)
+ * before re-applying them on a different timeframe.
+ */
+function clearAllChartDrawings() {
+    if (state.trendLines) state.trendLines.length = 0;
+    if (state.rectangles) state.rectangles.length = 0;
+    if (state.fibs) state.fibs.length = 0;
+    if (state.longPositions) state.longPositions.length = 0;
+    if (state.selectedTrendLines) state.selectedTrendLines.length = 0;
+    if (state.selectedRectangles) state.selectedRectangles.length = 0;
+    if (state.selectedFibs) state.selectedFibs.length = 0;
+    if (state.selectedLongPositions) state.selectedLongPositions.length = 0;
+    state.selectedTrendLine = null;
+    // Detach all primitives from the series
+    try {
+        const prims = candlestickSeries._primitives || [];
+        for (const p of prims) {
+            try { candlestickSeries.detachPrimitive(p); } catch (_) {}
+        }
+        candlestickSeries._primitives = [];
+    } catch (_) { /* not exposed; ignore */ }
+    // Clear any internal previews
+    state.previewTrendLine = null;
+    state.previewRectangle = null;
+    state.previewFib = null;
+}
+
+/**
+ * Apply drawings from the main process to the chart, using absolute timestamps
+ * and prices. Works for any timeframe because the coordinates are not bound
+ * to bar indices.
+ */
+function applyDrawingsToChart(drawings) {
+    if (!Array.isArray(drawings)) return;
+    for (const d of drawings) {
+        if (!d || !d.type) continue;
+        // Normalize time: if it looks like seconds (<1e12) convert to ms
+        const t1 = (typeof d.time1 === 'number' && d.time1 < 1e12) ? d.time1 * 1000 : d.time1;
+        const t2 = (typeof d.time2 === 'number' && d.time2 < 1e12) ? d.time2 * 1000 : d.time2;
+        if (t1 == null || t2 == null) continue;
+        try {
+            if (d.type === 'trendline') {
+                trendlines.create({ time: t1, price: d.price1 }, { time: t2, price: d.price2 });
+            } else if (d.type === 'rectangle') {
+                rectanglesMgr.create({ time: t1, price: d.price1 }, { time: t2, price: d.price2 });
+            } else if (d.type === 'fibonacci') {
+                fibsMgr.create({ time: t1, price: d.price1 }, { time: t2, price: d.price2 }, d.direction);
+            } else if (d.type === 'longposition') {
+                longPositionsMgr.create({ time: t1, price: d.price1 }, d.stopLoss, d.price2, d.riskRewardRatio || 2);
+            }
+        } catch (err) {
+            console.error('[renderer] failed to apply drawing:', d, err);
+        }
+    }
+    ui.requestRedraw();
+}
+
+/**
+ * Fetch all drawings from the main process and apply them to the chart.
+ * Called on initial load and after each timeframe switch.
+ */
+async function loadAndApplyGlobalDrawings() {
+    if (!window.electronAPI || !window.electronAPI.getDrawings) return;
+    try {
+        const drawings = await window.electronAPI.getDrawings();
+        console.log('[renderer] loaded', (drawings || []).length, 'drawings from main');
+        clearAllChartDrawings();
+        applyDrawingsToChart(drawings || []);
+    } catch (err) {
+        console.error('[renderer] loadAndApplyGlobalDrawings error:', err);
+    }
+}
+
+async function applyGlobalDrawingsToChart() {
+    await loadAndApplyGlobalDrawings();
+}
+
 // ---------- Single, deduped click / crosshair dispatch ----------
 chart.subscribeClick((param) => {
     if (longPositionDrawingTool.isActive()) {
         longPositionDrawingTool.handleChartClick(param);
+        // After drawing, save the new drawing to the main store
+        saveAllDrawingsToMain();
         return;
     }
     if (fibonacciDrawingTool.isActive()) {
         fibonacciDrawingTool.handleChartClick(param);
+        saveAllDrawingsToMain();
         return;
     }
     if (rectangleDrawingTool.isActive()) {
         rectangleDrawingTool.handleChartClick(param);
+        saveAllDrawingsToMain();
         return;
     }
     drawingTool.handleChartClick(param);
+    // After clicking, persist
+    saveAllDrawingsToMain();
 });
 
 chart.subscribeCrosshairMove((param) => {
@@ -511,6 +818,35 @@ document.querySelectorAll('.sidebar-btn').forEach(btn => {
     });
 });
 
+// ---------- Timeframe UI ----------
+if (timeframeBtn) {
+    timeframeBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (timeframeDropdown) timeframeDropdown.classList.toggle('open');
+    });
+}
+if (tfOptions) {
+    tfOptions.forEach(opt => {
+        opt.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const tf = opt.dataset.tf;
+            if (tf) switchTimeframe(tf);
+        });
+    });
+}
+// Close dropdown when clicking outside
+document.addEventListener('click', (e) => {
+    if (timeframeDropdown && timeframeDropdown.classList.contains('open')) {
+        if (e.target !== timeframeBtn && !timeframeDropdown.contains(e.target) && e.target !== timeframeLabel) {
+            timeframeDropdown.classList.remove('open');
+        }
+    }
+});
+// Mark the initial active option
+if (tfOptions) {
+    tfOptions.forEach(o => o.classList.toggle('active', o.dataset.tf === INITIAL_TIMEFRAME));
+}
+
 // ---------- Top-level events ----------
 window.addEventListener('keydown', (evt) => {
     if (evt.key === 'Escape') {
@@ -545,6 +881,8 @@ window.addEventListener('keydown', (evt) => {
             [...state.selectedTrendLines].forEach(tl => trendlines.remove(tl));
         }
         ui.requestRedraw();
+        // Persist updated drawings
+        saveAllDrawingsToMain();
     }
 });
 
@@ -554,4 +892,4 @@ new ResizeObserver(entries => {
     chart.resize(width, height);
 }).observe(container);
 
-console.log('[renderer] ready — click the Trend line, Rectangle, Fibonacci, or Long Position button in the sidebar to start drawing');
+console.log('[renderer] ready — multi-timeframe & global drawing sync enabled');

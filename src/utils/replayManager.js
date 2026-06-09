@@ -15,6 +15,7 @@ export function createReplayManager(chart, candlestickSeries) {
     let replayStartTimestamp = null;
     let dataBeforeReplay = [];
     let autoScroll = true;
+    let currentResolution = 60; // seconds per bar
     
     // Combined data array (initial + streamed bars)
     let allData = [];
@@ -59,18 +60,22 @@ export function createReplayManager(chart, candlestickSeries) {
         autoScroll = enabled;
     }
 
-    async function startReplay(timestamp) {
+    function setResolution(resolution) {
+        currentResolution = resolution;
+    }
+
+    async function startReplay(timestamp, timeframe = null) {
         if (currentState !== STATES.IDLE) {
             console.warn('[ReplayManager] Replay already active');
             return false;
         }
 
         try {
-            console.log('[ReplayManager] Starting replay at timestamp:', timestamp, '(' + new Date(timestamp).toISOString() + ')');
+            console.log('[ReplayManager] Starting replay at timestamp:', timestamp, '(' + new Date(timestamp).toISOString() + ')', 'timeframe:', timeframe);
             replayStartTimestamp = timestamp;
 
-            // Get data before the replay start point
-            const dataBefore = await window.replayAPI.getDataBefore(timestamp);
+            // Get data before the replay start point (with timeframe)
+            const dataBefore = await window.replayAPI.getDataBefore(timestamp, timeframe);
             console.log('[ReplayManager] Data before replay:', dataBefore.length, 'bars, last:', dataBefore.length ? new Date(dataBefore[dataBefore.length-1].timestamp).toISOString() : 'none');
             dataBeforeReplay = dataBefore;
 
@@ -88,7 +93,7 @@ export function createReplayManager(chart, candlestickSeries) {
             console.log('[ReplayManager] Built initial data:', allDataTemp.length);
 
             // Initialize streaming - buffer will receive ticks via onTick
-            await window.replayAPI.startStream(timestamp, 500);
+            await window.replayAPI.startStream(timestamp, 500, timeframe);
             console.log('[ReplayManager] Stream initialized, waiting for ticks');
             
             console.log('[ReplayManager] Final allData length:', allDataTemp.length);
@@ -216,6 +221,14 @@ export function createReplayManager(chart, candlestickSeries) {
         };
     }
 
+    function getCurrentTimestamp() {
+        return replayStartTimestamp;
+    }
+
+    function getReplayTimestamp() {
+        return replayStartTimestamp;
+    }
+
     /**
      * Handle incoming tick from the main process (interval-based playback).
      * This updates the chart data with a new candle and maintains trailing dummies.
@@ -280,6 +293,7 @@ export function createReplayManager(chart, candlestickSeries) {
         setSpeed,
         getSpeed,
         setAutoScroll,
+        setResolution,
         startReplay,
         stopReplay,
         startPlayback,
@@ -292,5 +306,8 @@ export function createReplayManager(chart, candlestickSeries) {
         onBufferLowCallback,
         getReplayInfo,
         handleTick,
+        getCurrentTimestamp,
+        getReplayTimestamp,
+        getResolution: () => currentResolution,
     };
 }

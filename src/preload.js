@@ -4,8 +4,8 @@ const { contextBridge, ipcRenderer } = require('electron');
 // Expose replay functionality to the renderer process
 contextBridge.exposeInMainWorld('replayAPI', {
     // Start a replay stream from a specific timestamp
-    startStream: (startTimestamp, chunkSize) =>
-        ipcRenderer.invoke('replay:start-stream', { startTimestamp, chunkSize }),
+    startStream: (startTimestamp, chunkSize, timeframe = null) =>
+        ipcRenderer.invoke('replay:start-stream', { startTimestamp, chunkSize, timeframe }),
 
     // Request the next chunk of data
     requestChunk: (replayId) =>
@@ -16,8 +16,8 @@ contextBridge.exposeInMainWorld('replayAPI', {
         ipcRenderer.invoke('replay:stop-stream', { replayId }),
 
     // Get data before a specific timestamp
-    getDataBefore: (endTimestamp) =>
-        ipcRenderer.invoke('replay:get-data-before', { endTimestamp }),
+    getDataBefore: (endTimestamp, timeframe = null) =>
+        ipcRenderer.invoke('replay:get-data-before', { endTimestamp, timeframe }),
 
     // Get total data info
     getDataInfo: () =>
@@ -52,6 +52,14 @@ contextBridge.exposeInMainWorld('replayAPI', {
         // We'll use the getState method from replayManager instead
     },
 
+    // Get current replay state from main process
+    getReplayState: () =>
+        ipcRenderer.invoke('replay:get-state'),
+
+    // Get truncated data for replay (timeframe + maxTimestamp)
+    getTruncatedData: ({ timeframe = null, maxTimestamp = null, limit = 2000 }) =>
+        ipcRenderer.invoke('replay:get-truncated-data', { timeframe, maxTimestamp, limit }),
+
     // Listen for replay events from main process
     onReplayEvent: (channel, callback) => {
         const subscription = (_event, ...args) => callback(...args);
@@ -72,11 +80,20 @@ contextBridge.exposeInMainWorld('electronAPI', {
      *        - <ms>  : fetch up to `limit` candles strictly OLDER than this ts
      * @param {number} [params.limit=2000]
      *        number of candles to return (capped at 5000 by the main process)
+     * @param {string} [params.fileName]
+     *        specific file to load from (optional)
+     * @param {string} [params.timeframe]
+     *        timeframe to load (e.g., 'M1', 'M5', 'H1', 'D1', '1m', '5m', '1h', '1d')
+     *        if provided, dynamically finds the matching file
+     * @param {string} [params.asset='XAUUSD']
+     *        asset symbol (for future multi-asset support)
+     * @param {number|null} [params.maxTimestamp]
+     *        maximum timestamp to include (filters out future data during replay)
      *
-     * @returns {Promise<{chunk: Array, hasMore: boolean, oldestTimestamp: number|null}>}
+     * @returns {Promise<{chunk: Array, hasMore: boolean, oldestTimestamp: number|null, timeframe: string|null, fileName: string|null}>}
      */
-    getHistoricalChunk: ({ targetTimestamp = null, limit = 1440, fileName = null } = {}) =>
-        ipcRenderer.invoke('get-historical-chunk', { targetTimestamp, limit, fileName }),
+    getHistoricalChunk: ({ targetTimestamp = null, limit = 1440, fileName = null, timeframe = null, asset = 'XAUUSD', maxTimestamp = null } = {}) =>
+        ipcRenderer.invoke('get-historical-chunk', { targetTimestamp, limit, fileName, timeframe, asset, maxTimestamp }),
 
     /**
      * Return a small metadata summary of every indexed real-data file.
@@ -87,20 +104,20 @@ contextBridge.exposeInMainWorld('electronAPI', {
         ipcRenderer.invoke('get-real-data-info'),
 
     /**
-     * Load the FULL content of a single real-data file. The renderer
-     * uses this to "jump" into a file so the user sees the complete
-     * contiguous year of data rather than paging through year-wide
-     * gaps one tiny slice at a time.
-     *
-     * @param {object} params
-     * @param {string} params.fileName
-     *        The file's name as reported by getRealDataInfo
-     *        (e.g. "DAT_MT_XAUUSD_M1_2022.json")
-     *
-     * @returns {Promise<{candles: Array, firstTimestamp: number, lastTimestamp: number, name: string} | null>}
+     * Save drawings to the main process (centralized store).
+     * Drawings should use absolute Unix timestamps (ms) and absolute prices.
+     * @param {Array} drawings - Array of drawing objects
+     * @returns {Promise<{success: boolean, count: number}>}
      */
-    getFileCandles: ({ fileName } = {}) =>
-        ipcRenderer.invoke('get-file-candles', { fileName }),
+    saveDrawings: (drawings) =>
+        ipcRenderer.invoke('save-drawings', drawings),
+
+    /**
+     * Get all drawings from the main process (centralized store).
+     * @returns {Promise<Array>} Array of drawing objects with absolute timestamps and prices
+     */
+    getDrawings: () =>
+        ipcRenderer.invoke('get-drawings'),
 });
 
 // Expose basic app info

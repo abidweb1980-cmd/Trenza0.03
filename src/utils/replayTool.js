@@ -192,8 +192,11 @@ export function createReplayTool({ state, chart, series, replayManager }) {
         // Deactivate the tool
         deactivate();
         
+        // Get current timeframe from renderer state
+        const timeframe = window.lazyDataState ? window.lazyDataState.currentTimeframe : 'D1';
+        
         // Start the replay through the manager
-        const success = await replayManager.startReplay(selectedTimestamp);
+        const success = await replayManager.startReplay(selectedTimestamp, timeframe);
         
         if (success) {
             console.log('[ReplayTool] Replay started successfully');

@@ -34,6 +34,32 @@ console.log('[main] REAL_DATA_DIR =', REAL_DATA_DIR);
 // Map to keep async iterators alive between IPC calls
 const replayIterators = new Map();
 
+// Global drawings store - single source of truth for all timeframes
+const globalDrawings = [];
+
+// Helper: extract timeframe from filename (e.g., "DAT_MT_XAUUSD_M1_2025.json" -> "M1")
+function extractTimeframeFromFilename(filename) {
+    const match = filename.match(/_MT_[A-Z]+_([A-Z0-9]+)_\d{4}\.json$/i);
+    return match ? match[1] : null;
+}
+
+// Helper: normalize timeframe string (e.g., "1m" -> "M1", "1h" -> "H1", "1d" -> "D1")
+function normalizeTimeframe(tf) {
+    const map = {
+        '1m': 'M1', 'm1': 'M1',
+        '3m': 'M3', 'm3': 'M3',
+        '5m': 'M5', 'm5': 'M5',
+        '15m': 'M15', 'm15': 'M15',
+        '30m': 'M30', 'm30': 'M30',
+        '1h': 'H1', 'h1': 'H1',
+        '2h': 'H2', 'h2': 'H2',
+        '4h': 'H4', 'h4': 'H4',
+        '12h': 'H12', 'h12': 'H12',
+        '1d': 'D1', 'd1': 'D1',
+    };
+    return map[tf.toLowerCase()] || tf.toUpperCase();
+}
+
 // Stream parser: reads a JSON array file line-by-line and yields
 // individual candle objects once their timestamp is >= startTimestamp.
 async function* streamCandles(filePath, startTimestamp) {
@@ -99,6 +125,7 @@ const replayState = {
     targetWindow: null, // The BrowserWindow to send ticks to
     bufferFilePath: null, // Current file being streamed
     bufferFileIndex: 0, // Position in the file
+    currentTimeframe: 'M1', // Current timeframe for replay
 };
 
 const REPLAY_BUFFER_SIZE = 10000; // Pre-buffer 10k bars
@@ -109,31 +136,34 @@ const REPLAY_BUFFER_REFILL_THRESHOLD = 500; // Refill when below this
 // ============================================================================
 
 /**
+ * Get the file path for a given timeframe.
+ */
+function getDataFileForTimeframe(timeframe) {
+    const normalizedTf = normalizeTimeframe(timeframe);
+    const file = path.join(REAL_DATA_DIR, `DAT_MT_XAUUSD_${normalizedTf}_2025.json`);
+    return fs.existsSync(file) ? file : REAL_DATA_FILE;
+}
+
+/**
  * Load candles into the replay buffer from the real data file.
  * This pre-loads future candles into memory for smooth playback.
  */
 async function fillReplayBuffer(startTimestamp) {
      console.log('[main] Filling replay buffer from timestamp:', startTimestamp);
      
-     if (realDataIndex.length === 0) {
-         console.warn('[main] No real data index available');
+     const dataFile = getDataFileForTimeframe(replayState.currentTimeframe);
+     if (!fs.existsSync(dataFile)) {
+         console.warn('[main] Data file does not exist:', dataFile);
          return;
      }
 
-     // Find the file containing the start timestamp
-     const fileEntry = realDataIndex.find(e => e.firstTimestamp <= startTimestamp && e.lastTimestamp >= startTimestamp);
-     if (!fileEntry) {
-         console.warn('[main] No file found for timestamp:', startTimestamp);
-         return;
-     }
-
-replayState.bufferFilePath = fileEntry.file;
+     replayState.bufferFilePath = dataFile;
     
     // Clear existing buffer before refill to avoid duplicates
     replayState.replayBuffer = [];
     
     const rl = createInterface({
-        input: fs.createReadStream(fileEntry.file, { encoding: 'utf8' }),
+        input: fs.createReadStream(replayState.bufferFilePath, { encoding: 'utf8' }),
         crlfDelay: Infinity,
     });
 
@@ -173,11 +203,10 @@ replayState.bufferFilePath = fileEntry.file;
  * Helper to get historical data before a timestamp for replay initialization.
  */
 async function getHistoricalChunkForReplay(endTimestamp, limit) {
-    if (realDataIndex.length === 0) return [];
-    const entry = realDataIndex[realDataIndex.length - 1]; // Most recent file
-    if (!entry) return [];
+    const dataFile = getDataFileForTimeframe(replayState.currentTimeframe);
+    if (!fs.existsSync(dataFile)) return [];
     
-    const rl = createInterface({ input: fs.createReadStream(entry.file), crlfDelay: Infinity });
+    const rl = createInterface({ input: fs.createReadStream(dataFile), crlfDelay: Infinity });
     const win = new Array(limit).fill(null);
     let wSize = 0, wStart = 0;
     let buf = '', depth = 0, inObj = false;
@@ -447,9 +476,11 @@ async function buildRealDataIndex() {
         const lastTs = await getLastTimestampFromFile(filePath);
 
         if (firstTs !== null && lastTs !== null) {
+            const timeframe = extractTimeframeFromFilename(name);
             realDataIndex.push({
                 file: filePath,
                 name,
+                timeframe,
                 firstTimestamp: firstTs,
                 lastTimestamp: lastTs,
                 size: stat.size,
@@ -461,7 +492,7 @@ async function buildRealDataIndex() {
 
     realDataIndex.sort((a, b) => a.firstTimestamp - b.firstTimestamp);
     console.log('[main] real data index built:',
-        realDataIndex.map(e => `${e.name} [${e.firstTimestamp}..${e.lastTimestamp}]`).join('  ')
+        realDataIndex.map(e => `${e.name} [tf:${e.timeframe}] [${e.firstTimestamp}..${e.lastTimestamp}]`).join('  ')
     );
 }
 
@@ -512,19 +543,32 @@ function registerIpcHandlers() {
             };
         });
 
-        ipcMain.handle('replay:get-data-before', async (event, { endTimestamp }) => {
+        ipcMain.handle('replay:get-data-before', async (event, { endTimestamp, timeframe = null }) => {
             const LIMIT = 2000;
             const win = new Array(LIMIT).fill(null);
             let wSize = 0;
             let wStart = 0;
 
-            // Read from real data file
-            if (fs.existsSync(REAL_DATA_FILE)) {
-                const rl = createInterface({ input: fs.createReadStream(REAL_DATA_FILE), crlfDelay: Infinity });
+            // Use the specified timeframe or fall back to current replay timeframe
+            const tf = timeframe || replayState.currentTimeframe;
+            const dataFile = getDataFileForTimeframe(tf);
+
+            // Read from the appropriate data file
+            if (fs.existsSync(dataFile)) {
+                const rl = createInterface({ input: fs.createReadStream(dataFile), crlfDelay: Infinity });
                 let buf = '', depth = 0, inObj = false;
                 for await (const rawLine of rl) {
                     const line = rawLine.trim();
-                    if (line === '' || line === '[' || line === ']') continue;
+                    if (line === '' || line === '[') continue;
+                    if (line === ']') {
+                        if (wSize > 0) {
+                            const out = new Array(wSize);
+                            for (let i = 0; i < wSize; i++) out[i] = win[(wStart + i) % LIMIT];
+                            out.sort((a, b) => a.timestamp - b.timestamp);
+                            return out;
+                        }
+                        continue;
+                    }
                     for (const ch of line) {
                         if (ch === '{') { depth++; inObj = true; }
                         else if (ch === '}') depth--;
@@ -555,12 +599,80 @@ function registerIpcHandlers() {
             return out;
         });
 
+        // Dedicated handler for truncated replay data (timeframe + maxTimestamp)
+        ipcMain.handle('replay:get-truncated-data', async (event, { timeframe = null, maxTimestamp = null, limit = 2000 }) => {
+            console.log('[main] replay:get-truncated-data called with timeframe:', timeframe, 'maxTimestamp:', maxTimestamp);
+            
+            const tf = timeframe || replayState.currentTimeframe;
+            const dataFile = getDataFileForTimeframe(tf);
+            
+            if (!fs.existsSync(dataFile)) {
+                console.warn('[main] Data file not found:', dataFile);
+                return [];
+            }
+
+            const win = new Array(limit).fill(null);
+            let wSize = 0;
+            let wStart = 0;
+
+            const rl = createInterface({ input: fs.createReadStream(dataFile), crlfDelay: Infinity });
+            let buf = '', depth = 0, inObj = false;
+            
+            for await (const rawLine of rl) {
+                const line = rawLine.trim();
+                if (line === '' || line === '[') continue;
+                if (line === ']') break;
+                
+                for (const ch of line) {
+                    if (ch === '{') { depth++; inObj = true; }
+                    else if (ch === '}') depth--;
+                }
+                buf += rawLine + '\n';
+                
+                if (inObj && depth === 0) {
+                    try {
+                        let cleanBuf = buf.trim();
+                        if (cleanBuf.endsWith(',')) cleanBuf = cleanBuf.slice(0, -1).trim();
+                        const obj = JSON.parse(cleanBuf);
+                        
+                        // Apply maxTimestamp filter
+                        if (maxTimestamp !== null && obj.timestamp > maxTimestamp) {
+                            buf = '';
+                            inObj = false;
+                            continue;
+                        }
+                        
+                        if (obj.timestamp < (maxTimestamp || Infinity)) {
+                            const idx = (wStart + wSize) % limit;
+                            win[idx] = obj;
+                            if (wSize < limit) wSize++;
+                            else wStart = (wStart + 1) % limit;
+                        }
+                    } catch (_) {}
+                    buf = '';
+                    inObj = false;
+                }
+            }
+
+            if (wSize === 0) return [];
+            const out = new Array(wSize);
+            for (let i = 0; i < wSize; i++) out[i] = win[(wStart + i) % limit];
+            out.sort((a, b) => a.timestamp - b.timestamp);
+            return out;
+        });
+
         // The new interval-based replay handlers - using the replay engine above
-        ipcMain.handle('replay:start-stream', async (event, { startTimestamp, chunkSize = 500 }) => {
-            console.log('[main] replay:start-stream called with', startTimestamp, chunkSize);
+        ipcMain.handle('replay:start-stream', async (event, { startTimestamp, chunkSize = 500, timeframe = null }) => {
+            console.log('[main] replay:start-stream called with', startTimestamp, chunkSize, timeframe);
             
             // Store the target window for sending ticks
             replayState.targetWindow = BrowserWindow.fromWebContents(event.sender);
+            
+            // Set the timeframe if provided
+            if (timeframe) {
+                replayState.currentTimeframe = timeframe;
+                console.log('[main] Replay timeframe set to:', timeframe);
+            }
             
             // Get historical data before the start point
             const historicalChunk = await getHistoricalChunkForReplay(startTimestamp - 1440 * 60000, 500);
@@ -627,9 +739,17 @@ function registerIpcHandlers() {
             return { success: true };
         });
 
+        ipcMain.handle('replay:get-state', async (event) => {
+            return {
+                isPlaying: replayState.isPlaying,
+                currentReplayTimestamp: replayState.currentReplayTimestamp,
+                replaySpeed: replayState.replaySpeed,
+            };
+        });
+
         ipcMain.handle('get-historical-chunk', async (event, payload = {}) => {
             console.log('[main] get-historical-chunk called with', payload);
-            const { targetTimestamp = null, fileName = null } = payload || {};
+            const { targetTimestamp = null, fileName = null, timeframe = null, asset = 'XAUUSD', maxTimestamp = null } = payload || {};
             const limit = Math.min(Math.max(parseInt(payload && payload.limit, 10) || 2000, 100), 5000);
 
             if (realDataIndex.length === 0) {
@@ -637,44 +757,54 @@ function registerIpcHandlers() {
                 return { chunk: [], hasMore: false, oldestTimestamp: null };
             }
 
-            if (targetTimestamp === null || targetTimestamp === undefined) {
-                let entry;
-                if (fileName) {
-                    entry = realDataIndex.find(e => e.name === fileName);
-                } else {
-                    const ordered = [...realDataIndex].sort((a, b) => b.lastTimestamp - a.lastTimestamp);
-                    entry = ordered[0];
-                }
-                if (!entry) return { chunk: [], hasMore: false, oldestTimestamp: null };
-                const tail = await readLastCandles(entry.file, limit);
-                const oldest = tail.length ? tail[0].timestamp : null;
-                // Check if there's older data in the same file
-                const hasMore = oldest !== null && oldest > entry.firstTimestamp;
-                return { chunk: tail, hasMore, oldestTimestamp: oldest };
-            }
-
             let entry;
             if (fileName) {
                 entry = realDataIndex.find(e => e.name === fileName);
-                if (!entry) return { chunk: [], hasMore: false, oldestTimestamp: null };
-            } else {
+            } else if (timeframe) {
+                const normalizedTf = normalizeTimeframe(timeframe);
+                const candidates = realDataIndex.filter(e => 
+                    e.timeframe && e.timeframe.toUpperCase() === normalizedTf.toUpperCase()
+                );
+                if (candidates.length === 0) {
+                    console.warn('[main] No file found for timeframe:', timeframe);
+                    return { chunk: [], hasMore: false, oldestTimestamp: null };
+                }
+                entry = [...candidates].sort((a, b) => b.lastTimestamp - a.lastTimestamp)[0];
+            } else if (targetTimestamp !== null && targetTimestamp !== undefined) {
                 const candidates = realDataIndex.filter(e => e.lastTimestamp < targetTimestamp);
                 if (candidates.length === 0) return { chunk: [], hasMore: false, oldestTimestamp: null };
                 entry = [...candidates].sort((a, b) => b.lastTimestamp - a.lastTimestamp)[0];
+            } else {
+                const ordered = [...realDataIndex].sort((a, b) => b.lastTimestamp - a.lastTimestamp);
+                entry = ordered[0];
             }
 
-            const part = await readCandlesBefore(entry.file, targetTimestamp, limit);
+            if (!entry) return { chunk: [], hasMore: false, oldestTimestamp: null };
+
+            let part;
+            if (targetTimestamp !== null && targetTimestamp !== undefined) {
+                part = await readCandlesBefore(entry.file, targetTimestamp, limit);
+            } else {
+                part = await readLastCandles(entry.file, limit);
+            }
+            
             if (part.length === 0) return { chunk: [], hasMore: false, oldestTimestamp: null };
 
+            if (maxTimestamp !== null && maxTimestamp !== undefined) {
+                part = part.filter(c => c.timestamp <= maxTimestamp);
+                if (part.length === 0) return { chunk: [], hasMore: false, oldestTimestamp: null };
+            }
+            
             const oldest = part[0].timestamp;
             const hasMore = oldest > entry.firstTimestamp;
-            return { chunk: part, hasMore, oldestTimestamp: oldest };
+            return { chunk: part, hasMore, oldestTimestamp: oldest, timeframe: entry.timeframe, fileName: entry.name };
         });
 
         ipcMain.handle('get-real-data-info', async () => {
             return {
                 files: realDataIndex.map(e => ({
                     name: e.name,
+                    timeframe: e.timeframe,
                     firstTimestamp: e.firstTimestamp,
                     lastTimestamp: e.lastTimestamp,
                     size: e.size,
@@ -684,6 +814,23 @@ function registerIpcHandlers() {
                     ? realDataIndex[realDataIndex.length - 1].lastTimestamp
                     : null,
             };
+        });
+
+        // Drawing persistence handlers
+        ipcMain.handle('save-drawings', async (event, drawingData) => {
+            console.log('[main] save-drawings called with', drawingData?.length || 0, 'drawings');
+            // Replace the entire drawings array with the new data
+            // drawingData should be an array of drawing objects with absolute timestamps and prices
+            globalDrawings.length = 0;
+            if (Array.isArray(drawingData)) {
+                globalDrawings.push(...drawingData);
+            }
+            return { success: true, count: globalDrawings.length };
+        });
+
+        ipcMain.handle('get-drawings', async () => {
+            console.log('[main] get-drawings called, returning', globalDrawings.length, 'drawings');
+            return [...globalDrawings]; // Return a copy to prevent external mutation
         });
 
         console.log('[main] all IPC handlers registered.');

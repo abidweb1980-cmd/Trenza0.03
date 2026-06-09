@@ -148,7 +148,9 @@ export function createReplayUI(replayManager, replayTool) {
             startReplayBtn.disabled = true;
             startReplayBtn.innerHTML = '<i class="bi bi-hourglass-split"></i> Loading...';
 
-            const success = await replayManager.startReplay(timestamp);
+            // Pass current timeframe from renderer state
+            const timeframe = window.lazyDataState ? window.lazyDataState.currentTimeframe : 'D1';
+            const success = await replayManager.startReplay(timestamp, timeframe);
 
             startReplayBtn.disabled = false;
             startReplayBtn.innerHTML = '<i class="bi bi-play-fill"></i> Start';
