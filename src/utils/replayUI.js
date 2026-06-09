@@ -160,8 +160,12 @@ export function createReplayUI(replayManager, replayTool) {
 
         // Play/Pause button
         playPauseBtn.addEventListener('click', () => {
-            if (replayManager) {
-                replayManager.togglePlayback();
+            if (replayManager && window.replayAPI) {
+                if (replayManager.isPlaying()) {
+                    window.replayAPI.pause();
+                } else {
+                    window.replayAPI.play();
+                }
             }
         });
 
@@ -175,15 +179,15 @@ export function createReplayUI(replayManager, replayTool) {
 
         // Step forward button
         stepForwardBtn.addEventListener('click', () => {
-            if (replayManager) {
-                replayManager.stepForward();
+            if (replayManager && window.replayAPI) {
+                window.replayAPI.step();
             }
         });
 
         // Speed select
         speedSelect.addEventListener('change', (e) => {
-            if (replayManager) {
-                replayManager.setSpeed(parseInt(e.target.value));
+            if (replayManager && window.replayAPI) {
+                window.replayAPI.setSpeed(parseInt(e.target.value));
             }
         });
 
@@ -206,6 +210,38 @@ export function createReplayUI(replayManager, replayTool) {
         replayManager.onProgressUpdateCallback((progress) => {
             updateProgressDisplay(progress);
         });
+    }
+
+    // Update state display - also check main-process state
+    function updateStateDisplay(state) {
+        // Sync button states with both local and main-process state
+        const isPlaying = replayManager.isPlaying();
+        if (playPauseBtn) {
+            const icon = playPauseBtn.querySelector('i');
+            if (isPlaying) {
+                icon.className = 'bi bi-pause-fill';
+            } else {
+                icon.className = 'bi bi-play-fill';
+            }
+        }
+        if (stateIndicator) {
+            stateIndicator.textContent = STATE_LABELS[state] || state;
+        }
+
+        // Update button states
+        const isActive = state !== 'IDLE';
+        if (playPauseBtn) {
+            playPauseBtn.disabled = !isActive;
+        }
+        if (stopBtn) {
+            stopBtn.disabled = !isActive;
+        }
+        if (stepForwardBtn) {
+            stepForwardBtn.disabled = !isActive;
+        }
+        if (speedSelect) {
+            speedSelect.disabled = !isActive;
+        }
     }
 
     // Show the panel

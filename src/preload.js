@@ -23,9 +23,37 @@ contextBridge.exposeInMainWorld('replayAPI', {
     getDataInfo: () =>
         ipcRenderer.invoke('replay:get-data-info'),
 
+    // New: Start playback (interval-based tick sending)
+    play: () =>
+        ipcRenderer.invoke('replay:play'),
+
+    // New: Step forward one bar
+    step: () =>
+        ipcRenderer.invoke('replay:step'),
+
+    // New: Pause playback
+    pause: () =>
+        ipcRenderer.invoke('replay:pause'),
+
+    // New: Set playback speed (ms per bar)
+    setSpeed: (speedMs) =>
+        ipcRenderer.invoke('replay:set-speed', { speedMs }),
+
+    // Listen for replay ticks (new interval-based system)
+    onTick: (callback) => {
+        const subscription = (_event, candle) => callback(candle);
+        ipcRenderer.on('replay:tick', subscription);
+        return () => ipcRenderer.removeListener('replay:tick', subscription);
+    },
+
+    // Check if replay is currently playing
+    isPlaying: () => {
+        // This is set by the renderer state, not main process
+        // We'll use the getState method from replayManager instead
+    },
+
     // Listen for replay events from main process
     onReplayEvent: (channel, callback) => {
-        // Remove listener when component unmounts
         const subscription = (_event, ...args) => callback(...args);
         ipcRenderer.on(channel, subscription);
         return () => ipcRenderer.removeListener(channel, subscription);

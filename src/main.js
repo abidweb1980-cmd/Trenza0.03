@@ -84,6 +84,177 @@ async function* streamAllCandles(startTimestamp) {
 }
 
 // ============================================================================
+// REPLAY ENGINE STATE
+// ============================================================================
+
+/**
+ * Global replay state - tracks the active replay session.
+ */
+const replayState = {
+    isPlaying: false,
+    currentReplayTimestamp: null,
+    replaySpeed: 1000, // ms per bar (1 second = 1 bar per second)
+    replayBuffer: [], // Preloaded future candles
+    replayIntervalId: null,
+    targetWindow: null, // The BrowserWindow to send ticks to
+    bufferFilePath: null, // Current file being streamed
+    bufferFileIndex: 0, // Position in the file
+};
+
+const REPLAY_BUFFER_SIZE = 10000; // Pre-buffer 10k bars
+const REPLAY_BUFFER_REFILL_THRESHOLD = 500; // Refill when below this
+
+// ============================================================================
+// REPLAY ENGINE FUNCTIONS
+// ============================================================================
+
+/**
+ * Load candles into the replay buffer from the real data file.
+ * This pre-loads future candles into memory for smooth playback.
+ */
+async function fillReplayBuffer(startTimestamp) {
+     console.log('[main] Filling replay buffer from timestamp:', startTimestamp);
+     
+     if (realDataIndex.length === 0) {
+         console.warn('[main] No real data index available');
+         return;
+     }
+
+     // Find the file containing the start timestamp
+     const fileEntry = realDataIndex.find(e => e.firstTimestamp <= startTimestamp && e.lastTimestamp >= startTimestamp);
+     if (!fileEntry) {
+         console.warn('[main] No file found for timestamp:', startTimestamp);
+         return;
+     }
+
+replayState.bufferFilePath = fileEntry.file;
+    
+    // Clear existing buffer before refill to avoid duplicates
+    replayState.replayBuffer = [];
+    
+    const rl = createInterface({
+        input: fs.createReadStream(fileEntry.file, { encoding: 'utf8' }),
+        crlfDelay: Infinity,
+    });
+
+    let buf = '', depth = 0, inObj = false;
+    let collected = 0;
+    let lastTs = replayState.currentReplayTimestamp || startTimestamp;
+    
+    for await (const rawLine of rl) {
+         const line = rawLine.trim();
+         if (line === '' || line === '[' || line === ']') continue;
+         for (const ch of line) {
+             if (ch === '{') { depth++; inObj = true; }
+             else if (ch === '}') depth--;
+         }
+         buf += rawLine + '\n';
+         if (inObj && depth === 0) {
+             try {
+                 let cleanBuf = buf.trim();
+                 if (cleanBuf.endsWith(',')) cleanBuf = cleanBuf.slice(0, -1).trim();
+                 const obj = JSON.parse(cleanBuf);
+                 // Only add candles strictly after the last timestamp we've seen
+                 if (obj.timestamp > lastTs) {
+                     replayState.replayBuffer.push(obj);
+                     collected++;
+                     if (collected >= REPLAY_BUFFER_SIZE) break;
+                 }
+             } catch (_) { /* skip */ }
+             buf = '';
+             inObj = false;
+         }
+     }
+     
+     console.log('[main] Buffer filled with', collected, 'bars');
+ }
+
+/**
+ * Helper to get historical data before a timestamp for replay initialization.
+ */
+async function getHistoricalChunkForReplay(endTimestamp, limit) {
+    if (realDataIndex.length === 0) return [];
+    const entry = realDataIndex[realDataIndex.length - 1]; // Most recent file
+    if (!entry) return [];
+    
+    const rl = createInterface({ input: fs.createReadStream(entry.file), crlfDelay: Infinity });
+    const win = new Array(limit).fill(null);
+    let wSize = 0, wStart = 0;
+    let buf = '', depth = 0, inObj = false;
+    
+    for await (const rawLine of rl) {
+        const line = rawLine.trim();
+        if (line === '' || line === '[' || line === ']') continue;
+        for (const ch of line) {
+            if (ch === '{') { depth++; inObj = true; }
+            else if (ch === '}') depth--;
+        }
+        buf += rawLine + '\n';
+        if (inObj && depth === 0) {
+            try {
+                let cleanBuf = buf.trim();
+                if (cleanBuf.endsWith(',')) cleanBuf = cleanBuf.slice(0, -1).trim();
+                const obj = JSON.parse(cleanBuf);
+                if (obj.timestamp < endTimestamp) {
+                    const idx = (wStart + wSize) % limit;
+                    win[idx] = obj;
+                    if (wSize < limit) wSize++;
+                    else wStart = (wStart + 1) % limit;
+                }
+            } catch (_) {}
+            buf = '';
+            inObj = false;
+        }
+    }
+    
+    if (wSize === 0) return [];
+    const out = new Array(wSize);
+    for (let i = 0; i < wSize; i++) out[i] = win[(wStart + i) % limit];
+    out.sort((a, b) => a.timestamp - b.timestamp);
+    return out;
+}
+
+/**
+ * Start the playback interval that sends ticks to the renderer.
+ */
+function startReplayInterval() {
+    if (replayState.replayIntervalId) {
+        clearInterval(replayState.replayIntervalId);
+    }
+    
+    replayState.isPlaying = true;
+    
+replayState.replayIntervalId = setInterval(async () => {
+         // Refill buffer if it's running low
+         if (replayState.replayBuffer.length < REPLAY_BUFFER_REFILL_THRESHOLD && replayState.currentReplayTimestamp) {
+             await fillReplayBuffer(replayState.currentReplayTimestamp);
+         }
+        
+        // Send next candle if available
+        if (replayState.replayBuffer.length > 0 && replayState.targetWindow) {
+            const nextCandle = replayState.replayBuffer.shift();
+            replayState.currentReplayTimestamp = nextCandle.timestamp;
+            replayState.targetWindow.webContents.send('replay:tick', nextCandle);
+        } else if (replayState.isPlaying) {
+            // No more data - pause playback
+            console.log('[main] Replay buffer exhausted, pausing');
+            stopReplayInterval();
+        }
+    }, replayState.replaySpeed);
+    
+    console.log('[main] Replay interval started, speed:', replayState.replaySpeed, 'ms');
+}
+
+function stopReplayInterval() {
+    if (replayState.replayIntervalId) {
+        clearInterval(replayState.replayIntervalId);
+        replayState.replayIntervalId = null;
+    }
+    replayState.isPlaying = false;
+    console.log('[main] Replay interval stopped');
+}
+
+// ============================================================================
 // LAZY LOADING / PAGINATION — Real Data Bridge
 // ============================================================================
 
@@ -384,40 +555,76 @@ function registerIpcHandlers() {
             return out;
         });
 
+        // The new interval-based replay handlers - using the replay engine above
         ipcMain.handle('replay:start-stream', async (event, { startTimestamp, chunkSize = 500 }) => {
             console.log('[main] replay:start-stream called with', startTimestamp, chunkSize);
-            const replayId = `replay_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-            const iterator = streamAllCandles(startTimestamp);
-            const firstChunk = [];
-            for (let i = 0; i < chunkSize; i++) {
-                const { value, done } = await iterator.next();
-                if (done) break;
-                firstChunk.push(value);
-            }
-            replayIterators.set(replayId, { iterator, chunkSize, startTimestamp });
-            console.log('[main] replay:start-stream returning', firstChunk.length, 'bars');
-            return { replayId, totalBars: firstChunk.length, chunk: firstChunk, hasMore: true };
+            
+            // Store the target window for sending ticks
+            replayState.targetWindow = BrowserWindow.fromWebContents(event.sender);
+            
+            // Get historical data before the start point
+            const historicalChunk = await getHistoricalChunkForReplay(startTimestamp - 1440 * 60000, 500);
+            console.log('[main] Historical chunk:', historicalChunk.length, 'bars');
+            
+            // Fill the replay buffer with future candles
+            await fillReplayBuffer(startTimestamp);
+            
+            return { 
+                replayId: 'interval-based', 
+                totalBars: historicalChunk.length, 
+                chunk: historicalChunk, 
+                hasMore: replayState.replayBuffer.length > 0 
+            };
         });
 
-        ipcMain.handle('replay:request-chunk', async (event, { replayId }) => {
-            const entry = replayIterators.get(replayId);
-            if (!entry) return { chunk: [], hasMore: false };
-            const { iterator, chunkSize } = entry;
-            const chunk = [];
-            for (let i = 0; i < chunkSize; i++) {
-                const { value, done } = await iterator.next();
-                if (done) {
-                    replayIterators.delete(replayId);
-                    return { chunk, hasMore: false };
-                }
-                chunk.push(value);
+        // New handler: Start playback (interval-based tick sending)
+        ipcMain.handle('replay:play', async (event) => {
+            console.log('[main] replay:play called');
+            replayState.isPlaying = true;
+            startReplayInterval();
+            return { success: true };
+        });
+
+        // New handler: Step forward one bar
+        ipcMain.handle('replay:step', async (event) => {
+            console.log('[main] replay:step called');
+            if (replayState.replayBuffer.length > 0 && replayState.targetWindow) {
+                const nextCandle = replayState.replayBuffer.shift();
+                replayState.currentReplayTimestamp = nextCandle.timestamp;
+                replayState.targetWindow.webContents.send('replay:tick', nextCandle);
             }
-            return { chunk, hasMore: true };
+            return { success: true };
+        });
+
+        // New handler: Pause playback
+        ipcMain.handle('replay:pause', async (event) => {
+            console.log('[main] replay:pause called');
+            stopReplayInterval();
+            return { success: true };
+        });
+
+        // New handler: Set playback speed
+        ipcMain.handle('replay:set-speed', async (event, { speedMs }) => {
+            console.log('[main] replay:set-speed called:', speedMs);
+            replayState.replaySpeed = speedMs;
+            if (replayState.isPlaying) {
+                stopReplayInterval();
+                startReplayInterval();
+            }
+            return { success: true };
+        });
+
+        // Keep old handlers for compatibility with existing frontend
+        ipcMain.handle('replay:request-chunk', async (event, { replayId }) => {
+            // Redirect to tick-based playback - this shouldn't be used in new system
+            return { chunk: [], hasMore: false };
         });
 
         ipcMain.handle('replay:stop-stream', (event, { replayId }) => {
-            const deleted = replayIterators.delete(replayId);
-            return { success: deleted };
+            console.log('[main] replay:stop-stream called');
+            stopReplayInterval();
+            replayState.replayBuffer = [];
+            return { success: true };
         });
 
         ipcMain.handle('get-historical-chunk', async (event, payload = {}) => {
@@ -441,7 +648,9 @@ function registerIpcHandlers() {
                 if (!entry) return { chunk: [], hasMore: false, oldestTimestamp: null };
                 const tail = await readLastCandles(entry.file, limit);
                 const oldest = tail.length ? tail[0].timestamp : null;
-                return { chunk: tail, hasMore: oldest !== null, oldestTimestamp: oldest };
+                // Check if there's older data in the same file
+                const hasMore = oldest !== null && oldest > entry.firstTimestamp;
+                return { chunk: tail, hasMore, oldestTimestamp: oldest };
             }
 
             let entry;
@@ -458,8 +667,7 @@ function registerIpcHandlers() {
             if (part.length === 0) return { chunk: [], hasMore: false, oldestTimestamp: null };
 
             const oldest = part[0].timestamp;
-            const earliestFile = realDataIndex[0];
-            const hasMore = !!(earliestFile && oldest !== null && earliestFile.firstTimestamp < oldest);
+            const hasMore = oldest > entry.firstTimestamp;
             return { chunk: part, hasMore, oldestTimestamp: oldest };
         });
 

@@ -344,16 +344,22 @@ if (replayToolBtn) {
         }
     });
 
+    // Set up tick listener for interval-based playback from main process
+    const unsubscribeTick = window.replayAPI.onTick((candle) => {
+        console.log('[renderer] Received tick:', new Date(candle.timestamp).toISOString());
+        replayManager.handleTick(candle);
+    });
+
     console.log('[renderer] Replay functionality initialized');
     }
 
     // Keyboard shortcut: Right Arrow to step forward 1 minute (1 candle) in replay mode
     document.addEventListener('keydown', (e) => {
         if (e.key === 'ArrowRight' && replayManager && replayManager.isActive()) {
-            console.log('[renderer] ArrowRight pressed - stepping forward, state:', replayManager.getState(), 'buffer:', replayManager.getBufferInfo());
+            console.log('[renderer] ArrowRight pressed - stepping forward');
             e.preventDefault();
             e.stopPropagation();
-            replayManager.stepForward();
+            window.replayAPI.step();
         }
     });
 

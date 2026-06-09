@@ -1,6 +1,6 @@
 import { extendWithDummies } from './dataExtension.js';
 
-// Replay Manager - Handles the bar replay functionality with precise playback timing
+// Replay Manager - Handles the bar replay functionality with interval-based tick system
 export function createReplayManager(chart, candlestickSeries) {
     // Replay states
     const STATES = {
@@ -12,10 +12,8 @@ export function createReplayManager(chart, candlestickSeries) {
 
     // State
     let currentState = STATES.IDLE;
-    let replayId = null;
     let replayStartTimestamp = null;
     let dataBeforeReplay = [];
-    let buffer = [];
     let autoScroll = true;
     
     // Combined data array (initial + streamed bars)
@@ -26,19 +24,11 @@ export function createReplayManager(chart, candlestickSeries) {
     const DUMMY_COUNT = 1000;
 
     // Playback timing state
-    let lastBarTime = 0;
     let playbackSpeed = 1000; // ms per bar (default 1 second)
-    let rafId = null;
-    let targetNextTime = 0;
 
     // Callbacks
     let onStateChange = null;
     let onProgressUpdate = null;
-    let onBufferLow = null;
-
-    // Buffer thresholds
-    const BUFFER_LOW_THRESHOLD = 200;
-    const BUFFER_REQUEST_SIZE = 500;
 
     // Get current state
     function getState() {
@@ -55,12 +45,9 @@ export function createReplayManager(chart, candlestickSeries) {
 
     function setSpeed(msPerBar) {
         playbackSpeed = msPerBar;
-        if (isPlaying()) {
-            // Adjust target time so the next bar fires at the right moment
-            const now = performance.now();
-            if (targetNextTime > now) {
-                targetNextTime = now;
-            }
+        if (isPlaying() && window.replayAPI) {
+            // Update speed in main process
+            window.replayAPI.setSpeed(msPerBar);
         }
     }
 
@@ -100,22 +87,9 @@ export function createReplayManager(chart, candlestickSeries) {
             }
             console.log('[ReplayManager] Built initial data:', allDataTemp.length);
 
-            // Start stream and wait for first chunk
-            await startStreamAndPreload(timestamp);
-            console.log('[ReplayManager] Initial buffer after preload:', buffer.length, 'bars');
-
-            // Add first bar from buffer to initial data
-            if (buffer.length > 0) {
-                const firstBar = buffer.shift();
-                console.log('[ReplayManager] Adding first streamed bar:', new Date(firstBar.timestamp).toISOString());
-                allDataTemp.push({
-                    time: firstBar.timestamp / 1000,
-                    open: firstBar.open,
-                    high: firstBar.high,
-                    low: firstBar.low,
-                    close: firstBar.close,
-                });
-            }
+            // Initialize streaming - buffer will receive ticks via onTick
+            await window.replayAPI.startStream(timestamp, 500);
+            console.log('[ReplayManager] Stream initialized, waiting for ticks');
             
             console.log('[ReplayManager] Final allData length:', allDataTemp.length);
 
@@ -159,85 +133,42 @@ export function createReplayManager(chart, candlestickSeries) {
             return true;
         } catch (error) {
             console.error('[ReplayManager] Error starting replay:', error);
-            await stopReplay();
+            stopReplay();
             return false;
         }
     }
 
-    async function startStreamAndPreload(timestamp) {
-        console.log('[ReplayManager] startStreamAndPreload called with timestamp:', timestamp, '(' + new Date(timestamp).toISOString() + ')');
-        const streamInfo = await window.replayAPI.startStream(timestamp, BUFFER_REQUEST_SIZE);
-        console.log('[ReplayManager] startStream returned:', streamInfo);
-        replayId = streamInfo.replayId;
-
-        if (streamInfo.chunk && streamInfo.chunk.length > 0) {
-            buffer.push(...streamInfo.chunk);
-        }
-        console.log('[ReplayManager] Buffer after preload:', buffer.length);
-    }
-
     function stopReplay() {
         console.log('[ReplayManager] Stopping replay');
-        stopPlayback();
-
-        if (replayId) {
-            window.replayAPI.stopStream(replayId).catch(() => {});
+        if (currentState === STATES.PLAYING && window.replayAPI) {
+            window.replayAPI.pause();
         }
 
-        replayId = null;
         replayStartTimestamp = null;
         dataBeforeReplay = [];
-        buffer = [];
         allData = [];
+        trailingDummies = [];
         currentState = STATES.IDLE;
-        lastBarTime = 0;
-        targetNextTime = 0;
 
         if (onStateChange) onStateChange(currentState);
-    }
-
-    // requestAnimationFrame-based playback loop
-    function playbackTick(timestamp) {
-        if (currentState !== STATES.PLAYING) {
-            rafId = null;
-            return;
-        }
-
-        if (timestamp >= targetNextTime) {
-            playNextBar();
-            // Schedule next bar: keep precise timing by setting target to last execution + speed
-            targetNextTime = timestamp + playbackSpeed;
-        }
-
-        rafId = requestAnimationFrame(playbackTick);
     }
 
     function startPlayback() {
-        if (currentState === STATES.PLAYING) return;
-
-        currentState = STATES.PLAYING;
-        if (onStateChange) onStateChange(currentState);
-
-        // Reset timing so first bar fires immediately
-        targetNextTime = performance.now();
-        lastBarTime = targetNextTime;
-        rafId = requestAnimationFrame(playbackTick);
-
-        console.log('[ReplayManager] Playback started at speed:', playbackSpeed, 'ms/bar');
+        // Trigger playback via main process
+        if (window.replayAPI && currentState !== STATES.PLAYING) {
+            window.replayAPI.play();
+            currentState = STATES.PLAYING;
+            if (onStateChange) onStateChange(currentState);
+        }
     }
 
     function stopPlayback() {
-        if (rafId) {
-            cancelAnimationFrame(rafId);
-            rafId = null;
-        }
-
-        if (currentState === STATES.PLAYING) {
+        // Trigger pause via main process
+        if (window.replayAPI && currentState === STATES.PLAYING) {
+            window.replayAPI.pause();
             currentState = STATES.PAUSED;
             if (onStateChange) onStateChange(currentState);
         }
-
-        console.log('[ReplayManager] Playback stopped');
     }
 
     function togglePlayback() {
@@ -248,25 +179,56 @@ export function createReplayManager(chart, candlestickSeries) {
         }
     }
 
-    function playNextBar() {
-        // If buffer is low, request more data (non-blocking)
-        if (buffer.length < BUFFER_LOW_THRESHOLD) {
-            requestMoreData();
-        }
-
-        if (buffer.length === 0) {
-            console.log('[ReplayManager] Buffer empty');
+    function stepForward() {
+        console.log('[ReplayManager] stepForward called, state:', currentState);
+        if (currentState === STATES.IDLE) {
+            console.warn('[ReplayManager] Cannot step, replay not active');
             return;
         }
 
-        const nextBar = buffer.shift();
-        console.log('[ReplayManager] Playing bar:', new Date(nextBar.timestamp).toISOString());
+        if (currentState === STATES.PLAYING) {
+            stopPlayback();
+        }
+
+        // Trigger step via IPC (uses tick-based system)
+        if (window.replayAPI && window.replayAPI.step) {
+            window.replayAPI.step();
+        }
+    }
+
+    function onStateChangeCallback(callback) {
+        onStateChange = callback;
+    }
+
+    function onProgressUpdateCallback(callback) {
+        onProgressUpdate = callback;
+    }
+
+    function onBufferLowCallback(callback) {}
+
+    function getReplayInfo() {
+        return {
+            state: currentState,
+            startTimestamp: replayStartTimestamp,
+            bufferLength: 0,
+            playbackSpeed,
+            autoScroll,
+        };
+    }
+
+    /**
+     * Handle incoming tick from the main process (interval-based playback).
+     * This updates the chart data with a new candle and maintains trailing dummies.
+     */
+    function handleTick(candle) {
+        if (currentState === STATES.IDLE) return;
+        
         const formattedBar = {
-            time: nextBar.timestamp / 1000,
-            open: nextBar.open,
-            high: nextBar.high,
-            low: nextBar.low,
-            close: nextBar.close,
+            time: candle.timestamp / 1000,
+            open: candle.open,
+            high: candle.high,
+            low: candle.low,
+            close: candle.close,
         };
 
         // Insert bar BEFORE trailing dummies
@@ -274,15 +236,15 @@ export function createReplayManager(chart, candlestickSeries) {
         realData.push(formattedBar);
         
         // Update trailing dummies starting from this new bar
-        trailingDummies = [];
         const nextBarTime = formattedBar.time;
+        trailingDummies = [];
         for (let i = 1; i <= DUMMY_COUNT; i++) {
             trailingDummies.push({
                 time: nextBarTime + i * 60, // 60 seconds = 1 minute
-                open: nextBar.close,
-                high: nextBar.close,
-                low: nextBar.close,
-                close: nextBar.close,
+                open: candle.close,
+                high: candle.close,
+                low: candle.close,
+                close: candle.close,
             });
         }
         
@@ -299,96 +261,15 @@ export function createReplayManager(chart, candlestickSeries) {
                         to: currentRange.to + 1,
                     });
                 }
-            } catch (_) { /* ignore range errors */ }
+            } catch (_) { }
         }
 
         if (onProgressUpdate) {
             onProgressUpdate({
                 currentBar: allData.length - trailingDummies.length,
-                totalBuffered: buffer.length,
+                totalBuffered: 0,
             });
         }
-    }
-
-    function stepForward() {
-        console.log('[ReplayManager] stepForward called, state:', currentState, 'buffer:', buffer.length);
-        if (currentState === STATES.IDLE) {
-            console.warn('[ReplayManager] Cannot step, replay not active');
-            return;
-        }
-
-        if (currentState === STATES.PLAYING) {
-            stopPlayback();
-        }
-
-        // If buffer is empty, request chunk synchronously
-        if (buffer.length === 0 && replayId) {
-            console.log('[ReplayManager] Buffer empty, requesting more');
-            window.replayAPI.requestChunk(replayId).then(({ chunk }) => {
-                console.log('[ReplayManager] Got chunk:', chunk ? chunk.length : 0);
-                if (chunk && chunk.length > 0) {
-                    buffer.push(...chunk);
-                }
-                if (buffer.length > 0) {
-                    playNextBar();
-                } else {
-                    console.warn('[ReplayManager] Still empty after request');
-                }
-            });
-            return;
-        }
-
-        playNextBar();
-    }
-
-    async function requestMoreData() {
-        if (!replayId) return;
-
-        try {
-            const { chunk, hasMore } = await window.replayAPI.requestChunk(replayId);
-
-            if (chunk.length > 0) {
-                buffer.push(...chunk);
-            }
-
-            if (!hasMore) {
-            }
-
-            if (onBufferLow) {
-                onBufferLow({ bufferSize: buffer.length, isLow: buffer.length < BUFFER_LOW_THRESHOLD });
-            }
-        } catch (error) {
-        }
-    }
-
-    function getBufferInfo() {
-        return {
-            bufferSize: buffer.length,
-            isLow: buffer.length < BUFFER_LOW_THRESHOLD,
-        };
-    }
-
-    function onStateChangeCallback(callback) {
-        onStateChange = callback;
-    }
-
-    function onProgressUpdateCallback(callback) {
-        onProgressUpdate = callback;
-    }
-
-    function onBufferLowCallback(callback) {
-        onBufferLow = callback;
-    }
-
-    function getReplayInfo() {
-        return {
-            state: currentState,
-            replayId,
-            startTimestamp: replayStartTimestamp,
-            bufferLength: buffer.length,
-            playbackSpeed,
-            autoScroll,
-        };
     }
 
     return {
@@ -405,10 +286,11 @@ export function createReplayManager(chart, candlestickSeries) {
         stopPlayback,
         togglePlayback,
         stepForward,
-        getBufferInfo,
+        getBufferInfo: () => ({ bufferSize: 0, isLow: false }),
         onStateChangeCallback,
         onProgressUpdateCallback,
         onBufferLowCallback,
         getReplayInfo,
+        handleTick,
     };
 }
